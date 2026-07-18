@@ -10,10 +10,10 @@
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-skill%20%2B%20plugin-orange.svg)](https://claude.com/claude-code)
 
 一個 [Claude Code](https://claude.com/claude-code) skill：把長影音內容濃縮成 **3–7 條重點 + 一段摘要**。
-轉錄用 whisper 在本機執行，以內容 hash 快取——同一來源**永遠不會轉錄第二次**；之後要求換角度重新摘要，
-直接吃快取、幾秒完成。
+轉錄用 whisper 在本機執行，以內容 hash 快取——快取存在期間，同一來源**預設不會重新轉錄**
+（除非 `--force`）；之後要求換角度重新摘要，直接吃快取、幾秒完成。
 
-> 一小時的 podcast 要轉錄十分鐘——但一輩子只需要這一次。
+> 一小時的 podcast 要轉錄十分鐘——之後就交給快取回答。
 
 ## 為什麼？
 
@@ -32,8 +32,8 @@
 ## 特色
 
 - ✓ YouTube、podcast、任何 yt-dlp 支援的網址——或本機影音檔
-- ✓ 完全本機：下載、轉錄、快取，內容不離開你的電腦
-- ✓ 內容 hash 快取：重新摘要（任何角度）永不重複轉錄
+- ✓ 媒體管線全本機：下載、轉錄、快取都在你的電腦上跑——音訊永不上傳（見[隱私](#隱私)）
+- ✓ 內容 hash 快取：快取存在期間，重新摘要（任何角度）直接重用逐字稿
 - ✓ whisper 後端自動偵測：mlx-whisper / faster-whisper / whisper.cpp / openai-whisper
 - ✓ 語言自動偵測；中文可選配簡轉繁（OpenCC）
 - ✓ 內建快取管理：列表、單清、全清、選配保留期限
@@ -62,7 +62,7 @@ cp -r audio-tldr-skill/skills/audio-tldr ~/.claude/skills/
 
 ## 前置準備
 
-全程本機執行，不上傳任何內容。
+媒體管線——下載、轉錄、快取——全部在你的電腦上執行。
 
 | 需求 | 用途 | 安裝 |
 |---|---|---|
@@ -85,6 +85,32 @@ whisper 後端（依自動偵測順序）：
 **選配——繁體中文**：whisper 對中文常輸出簡體。`pip install opencc` 之後，中文逐字稿自動轉台灣繁體
 （並以 prompt 引導模型優先用繁體詞彙）；沒裝就維持原樣。
 
+### Windows 注意事項
+
+Windows 全功能支援——用 PowerShell 安裝：
+
+```powershell
+# 前置準備（示範 winget；Chocolatey 用 choco install ffmpeg yt-dlp）
+winget install Gyan.FFmpeg
+winget install yt-dlp.yt-dlp
+py -3 -m pip install faster-whisper      # Windows 建議後端
+
+# 安裝 skill（手動複製）
+git clone https://github.com/AugustusW/audio-tldr-skill.git
+Copy-Item -Recurse audio-tldr-skill\skills\audio-tldr "$env:USERPROFILE\.claude\skills\"
+```
+
+- **Python 指令**——`python3` 不存在時改用 `python` 或 py launcher（`py -3`）；skill 已指示
+  Claude 自動改用，自己手動跑腳本時請對應替換。
+- **Skill 路徑**——Windows 的 Claude Code 從 `%USERPROFILE%\.claude\skills\` 讀取 skill
+  （plugin 安裝方式與 macOS/Linux 完全相同）。
+- **GPU（選配）**——faster-whisper 預設 CPU 即可跑。NVIDIA 加速走 CTranslate2，驗證 CUDA 是否可見：
+  `py -3 -c "import ctranslate2; print(ctranslate2.get_cuda_device_count())"`
+  （非 0 = GPU 可用）。所需 CUDA/cuDNN 版本見
+  [faster-whisper README](https://github.com/SYSTRAN/faster-whisper#gpu)。
+- mlx-whisper 僅限 Apple Silicon；whisper.cpp 在 Windows 需要 PATH 上有 `whisper-cli.exe`
+  並設 `AUDIO_TLDR_WHISPER_CPP_MODEL`。
+
 ## 用法
 
 ```
@@ -104,6 +130,14 @@ whisper 後端（依自動偵測順序）：
    未命中才 yt-dlp 下載 → 用最佳可用 whisper 後端轉錄 → 把 `transcript.txt` + `meta.json`
    存進 `~/.cache/audio-tldr/<sha256>/`。
 2. **Digest**——Claude 讀快取逐字稿，產出重點、摘要、（長內容）大致時間軸。換角度重摘要完全跳過第一段。
+
+## 隱私
+
+精確說清楚什麼留在本機、什麼不是：
+
+- **音訊/影片永遠不離開你的電腦。** 下載、轉錄、快取 100% 本機——不走雲端語音 API、無遙測、無第三方服務。
+- **Digest 階段會把逐字稿文字（絕不是音訊）送進模型**——在你自己的 Claude session 內，跟請 Claude
+  讀任何本機檔案完全一樣。若某段錄音連文字都很敏感，可只跑第一段：逐字稿會留在本機快取，直到你明確要求摘要。
 
 ## 快取與設定
 
@@ -137,8 +171,10 @@ python3 -m pytest tests/   # 18 個單元測試，不需網路或模型
 
 ## 狀態
 
-v0.1.0——核心流程（轉錄 → 快取 → digest）、四個 whisper 後端、中文轉換、快取管理均已完成並通過
-端對端測試。可能的下一步：SRT 字幕匯出、講者分離。歡迎開 issue 與 PR。
+v0.1.0——核心邏輯有 18 個離線單元測試（yt-dlp、whisper 後端、快取、OpenCC 皆以 mock 模擬，
+不需網路或模型）。完整流程已在 macOS + mlx-whisper 上人工驗證（真實 YouTube 下載、轉錄、
+快取重摘要、中文轉換）。尚無自動化測試涵蓋：真實下載、其餘三個後端、Windows 環境。
+可能的下一步：SRT 字幕匯出、講者分離。歡迎開 issue 與 PR。
 
 ## 授權
 

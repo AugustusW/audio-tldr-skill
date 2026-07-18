@@ -11,10 +11,10 @@ English | [繁體中文](./README.zh-TW.md)
 
 A [Claude Code](https://claude.com/claude-code) skill that turns long-form media into **3–7 key
 takeaways + a summary**. Transcription runs locally with whisper and is cached by content hash —
-the same source is **never transcribed twice**. Ask for a different angle later and it re-digests
-from cache in seconds.
+while a cache entry exists, the same source is **not transcribed again** (unless you `--force`).
+Ask for a different angle later and it re-digests from cache in seconds.
 
-> An hour of podcast is 10 minutes of transcription — but only once.
+> An hour of podcast is 10 minutes of transcription — after that, the cache answers.
 
 ## Why?
 
@@ -34,8 +34,8 @@ re-upload, re-transcribe, re-pay      transcribe once, ever
 ## Features
 
 - ✓ YouTube, podcasts, and any yt-dlp-supported URL — or local audio/video files
-- ✓ Fully local: download, transcription, cache — nothing leaves your machine
-- ✓ Content-hash cache: re-summarizing (any angle) never re-transcribes
+- ✓ Local media pipeline: download, transcription, cache all run on your machine — audio is never uploaded (see [Privacy](#privacy))
+- ✓ Content-hash cache: re-summarizing (any angle) reuses the transcript while the entry exists
 - ✓ Whisper backend auto-detection: mlx-whisper / faster-whisper / whisper.cpp / openai-whisper
 - ✓ Language auto-detection; optional Simplified→Traditional Chinese conversion (OpenCC)
 - ✓ Cache management built in: list, clear one, clear all, opt-in retention
@@ -64,7 +64,7 @@ Invoke with `/audio-tldr:audio-tldr`. Both options can coexist — plugin skills
 
 ## Prerequisites
 
-Everything runs locally; nothing is uploaded anywhere.
+The media pipeline — download, transcription, cache — runs entirely on your machine.
 
 | Requirement | Why | Install |
 |---|---|---|
@@ -88,6 +88,34 @@ Local files don't need `yt-dlp` — only a whisper backend.
 and Chinese transcripts are converted to Taiwan Traditional automatically (plus the model is
 biased toward Traditional vocabulary). Not installed → transcripts are left as-is.
 
+### Windows notes
+
+Everything works on Windows — install with PowerShell:
+
+```powershell
+# prerequisites (winget shown; Chocolatey: choco install ffmpeg yt-dlp)
+winget install Gyan.FFmpeg
+winget install yt-dlp.yt-dlp
+py -3 -m pip install faster-whisper      # recommended backend on Windows
+
+# install the skill (manual copy)
+git clone https://github.com/AugustusW/audio-tldr-skill.git
+Copy-Item -Recurse audio-tldr-skill\skills\audio-tldr "$env:USERPROFILE\.claude\skills\"
+```
+
+- **Python command** — if `python3` isn't recognized, use `python` or the py launcher (`py -3`);
+  the skill tells Claude to fall back automatically, but substitute accordingly when running the
+  script yourself.
+- **Skill path** — Claude Code on Windows reads skills from `%USERPROFILE%\.claude\skills\`
+  (plugin install works identically to macOS/Linux).
+- **GPU (optional)** — faster-whisper runs on CPU out of the box. NVIDIA acceleration goes
+  through CTranslate2; verify CUDA is visible with
+  `py -3 -c "import ctranslate2; print(ctranslate2.get_cuda_device_count())"`
+  (non-zero = GPU available). For the required CUDA/cuDNN versions see the
+  [faster-whisper README](https://github.com/SYSTRAN/faster-whisper#gpu).
+- mlx-whisper is Apple-Silicon-only. whisper.cpp on Windows needs a `whisper-cli.exe` on PATH
+  plus `AUDIO_TLDR_WHISPER_CPP_MODEL`.
+
 ## Usage
 
 ```
@@ -110,6 +138,17 @@ Two phases, deliberately separated:
 2. **Digest** — Claude reads the cached transcript and produces takeaways, a summary, and (for
    long content) an approximate timeline. Re-digesting with a different focus skips phase 1
    entirely.
+
+## Privacy
+
+Be precise about what stays local and what doesn't:
+
+- **Your audio/video never leaves the machine.** Downloading, transcription, and caching are
+  100% local — no cloud speech API, no telemetry, no third-party services.
+- **The digest phase sends the transcript text (never the audio) to the model**, inside your own
+  Claude session — exactly like asking Claude to read any local file. If a recording is too
+  sensitive even as text, run Phase 1 only: the transcript stays in your local cache until you
+  explicitly ask for a digest.
 
 ## Cache & configuration
 
@@ -143,9 +182,11 @@ python3 -m pytest tests/   # 18 unit tests, no network or model needed
 
 ## Status
 
-v0.1.0 — core flow (transcribe → cache → digest), four whisper backends, Chinese conversion,
-and cache management are working and tested end-to-end. Possible next: SRT export, speaker
-diarization. Issues and PRs welcome.
+v0.1.0 — core logic is covered by 18 offline unit tests (yt-dlp, whisper backends, cache, and
+OpenCC are mocked; no network or models needed). The full flow has been manually verified on
+macOS with mlx-whisper (real YouTube download, transcription, cached re-digest, Chinese
+conversion). Not yet covered by automated tests: real downloads, the other three backends, and
+Windows. Possible next: SRT export, speaker diarization. Issues and PRs welcome.
 
 ## License
 

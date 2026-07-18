@@ -1,11 +1,11 @@
 ---
 name: audio-tldr
-description: Summarize videos, audio files, and podcasts into key takeaways. Give it a YouTube/podcast URL or a local audio/video file — it transcribes locally (cached, never re-transcribes the same source) and distills the transcript into key points and a summary. Use when the user asks to summarize, get key points from, or TL;DR any audio or video content.
+description: Summarize videos, audio files, and podcasts into key takeaways. Give it a YouTube/podcast URL or a local audio/video file — it transcribes locally (cached; repeat requests reuse the transcript) and distills the transcript into key points and a summary. Use when the user asks to summarize, get key points from, or TL;DR any audio or video content.
 ---
 
 # audio-tldr
 
-Turn any video / audio / podcast into key takeaways + a summary. Two-phase design: transcription is cached on disk, so re-summarizing (or summarizing from a different angle) never re-transcribes.
+Turn any video / audio / podcast into key takeaways + a summary. Two-phase design: transcription is cached on disk, so re-summarizing (or summarizing from a different angle) reuses the cached transcript instead of re-transcribing.
 
 ## Phase 1 — Transcribe (cached)
 
@@ -16,6 +16,8 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/transcribe.py" "<URL or file path>"
 ```
 
 Optional flags: `--language zh` (force language), `--force` (ignore cache).
+
+On Windows, if `python3` is not found, run the same command with `python` or `py -3` instead.
 
 The script prints one JSON line: `{transcript_path, title, duration, language, backend, cache_hit}`.
 
