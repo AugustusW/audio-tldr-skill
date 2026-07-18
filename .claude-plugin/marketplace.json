@@ -1,0 +1,13 @@
+{
+  "name": "audio-tldr-skill",
+  "description": "Marketplace for the audio-tldr plugin: summarize videos, audio, and podcasts with local cached transcription.",
+  "owner": { "name": "AugustusW" },
+  "plugins": [
+    {
+      "name": "audio-tldr",
+      "source": "./",
+      "description": "Summarize videos, audio files, and podcasts into key takeaways with local, cached transcription.",
+      "version": "0.1.0"
+    }
+  ]
+}
