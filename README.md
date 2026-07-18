@@ -14,7 +14,7 @@ takeaways + a summary**. Transcription runs locally with whisper and is cached b
 while a cache entry exists, the same source is **not transcribed again** (unless you `--force`).
 Ask for a different angle later and it re-digests from cache in seconds.
 
-> An hour of podcast is 10 minutes of transcription — after that, the cache answers.
+> First-run transcription time depends on your hardware, model, and backend — after that, the cache answers.
 
 ## Why?
 
@@ -28,7 +28,7 @@ Without audio-tldr                    With audio-tldr
 watch the whole video                 paste the URL
 take notes by hand                    get takeaways + summary
 "summarize it differently…"           re-digest from cache, instant
-re-upload, re-transcribe, re-pay      transcribe once, ever
+re-upload, re-transcribe, re-pay      transcribe once, reuse from cache
 ```
 
 ## Features
@@ -84,13 +84,33 @@ Whisper backends, in the order the skill auto-detects them:
 
 Local files don't need `yt-dlp` — only a whisper backend.
 
+For URL sources, make sure you have the right to download and process the content, and comply
+with the source site's terms and your local copyright law.
+
+### Choosing a model
+
+The defaults favor safety over quality on CPU (`small` everywhere except mlx). Override with
+`AUDIO_TLDR_MODEL` — the name must be valid for your active backend:
+
+| Situation | Suggested model |
+|---|---|
+| CPU / quick tests | `small` |
+| General Chinese summaries | `medium` |
+| Names, jargon, accuracy-critical | `large-v3` |
+| Capable GPU, speed + quality | `large-v3` or `large-v3-turbo` |
+
+```powershell
+$env:AUDIO_TLDR_MODEL = "large-v3"    # PowerShell; bash/zsh: export AUDIO_TLDR_MODEL=large-v3
+```
+
 **Optional — Traditional Chinese:** whisper often emits Simplified Chinese. `pip install opencc`
 and Chinese transcripts are converted to Taiwan Traditional automatically (plus the model is
 biased toward Traditional vocabulary). Not installed → transcripts are left as-is.
 
 ### Windows notes
 
-Everything works on Windows — install with PowerShell:
+Windows is supported by the underlying Python stack, but the full flow has **not yet been
+verified on Windows** — reports welcome. Install with PowerShell:
 
 ```powershell
 # prerequisites (winget shown; Chocolatey: choco install ffmpeg yt-dlp)
@@ -100,8 +120,13 @@ py -3 -m pip install faster-whisper      # recommended backend on Windows
 
 # install the skill (manual copy)
 git clone https://github.com/AugustusW/audio-tldr-skill.git
-Copy-Item -Recurse audio-tldr-skill\skills\audio-tldr "$env:USERPROFILE\.claude\skills\"
+$skillsDir = "$env:USERPROFILE\.claude\skills"
+New-Item -ItemType Directory -Force -Path $skillsDir | Out-Null
+Copy-Item -Recurse -Force "audio-tldr-skill\skills\audio-tldr" $skillsDir
 ```
+
+Manual copy does not auto-update, and `-Force` overwrites an existing `audio-tldr` folder —
+prefer the plugin install if you want managed versions.
 
 - **Python command** — if `python3` isn't recognized, use `python` or the py launcher (`py -3`);
   the skill tells Claude to fall back automatically, but substitute accordingly when running the
@@ -109,9 +134,11 @@ Copy-Item -Recurse audio-tldr-skill\skills\audio-tldr "$env:USERPROFILE\.claude\
 - **Skill path** — Claude Code on Windows reads skills from `%USERPROFILE%\.claude\skills\`
   (plugin install works identically to macOS/Linux).
 - **GPU (optional)** — faster-whisper runs on CPU out of the box. NVIDIA acceleration goes
-  through CTranslate2; verify CUDA is visible with
-  `py -3 -c "import ctranslate2; print(ctranslate2.get_cuda_device_count())"`
-  (non-zero = GPU available). For the required CUDA/cuDNN versions see the
+  through CTranslate2; check that a CUDA device is visible with
+  `py -3 -c "import ctranslate2; print(ctranslate2.get_cuda_device_count())"`.
+  Non-zero means CTranslate2 can see the GPU — it does **not** guarantee the CUDA runtime,
+  cuBLAS/cuDNN DLLs, and GPU model loading all work; run one short real transcription to
+  confirm. Required CUDA/cuDNN versions: see the
   [faster-whisper README](https://github.com/SYSTRAN/faster-whisper#gpu).
 - mlx-whisper is Apple-Silicon-only. whisper.cpp on Windows needs a `whisper-cli.exe` on PATH
   plus `AUDIO_TLDR_WHISPER_CPP_MODEL`.
@@ -122,10 +149,13 @@ Copy-Item -Recurse audio-tldr-skill\skills\audio-tldr "$env:USERPROFILE\.claude\
 > summarize https://www.youtube.com/watch?v=xxxx
 > give me the key points from this podcast: https://podcasts.apple.com/...
 > /audio-tldr ~/Downloads/meeting-recording.m4a
+> summarize this talk for a beginner — action items only: https://youtu.be/xxxx
 > (later) same video, but focus only on what they said about pricing
 ```
 
-The last one re-uses the cached transcript — instant, no re-transcription.
+State your needs in the request — focus, audience, format, length, language — and the digest
+follows them instead of the default takeaways+summary structure. The last one re-uses the
+cached transcript — instant, no re-transcription.
 
 ## How it works
 
@@ -143,12 +173,28 @@ Two phases, deliberately separated:
 
 Be precise about what stays local and what doesn't:
 
-- **Your audio/video never leaves the machine.** Downloading, transcription, and caching are
-  100% local — no cloud speech API, no telemetry, no third-party services.
+- **Your audio/video never leaves the machine.** No third-party transcription service is used,
+  and the scripts in this repo contain no telemetry. Network access still happens where you'd
+  expect: yt-dlp fetches URL sources from the source site, and whisper backends may download
+  their model on first use (dependency behavior is governed by those projects).
 - **The digest phase sends the transcript text (never the audio) to the model**, inside your own
-  Claude session — exactly like asking Claude to read any local file. If a recording is too
-  sensitive even as text, run Phase 1 only: the transcript stays in your local cache until you
-  explicitly ask for a digest.
+  Claude session — exactly like asking Claude to read any local file.
+- **Cached transcripts are unencrypted plaintext, kept indefinitely by default**, under
+  `~/.cache/audio-tldr/`. After processing sensitive content, `--clear` that entry, or configure
+  a retention period.
+- **Phase 1 only (sensitive recordings):** transcribe without ever handing the text to Claude —
+  run the script yourself; stdout is metadata JSON only, and the transcript stays at the
+  returned `transcript_path` until you delete it:
+
+  ```bash
+  # macOS/Linux
+  python3 ~/.claude/skills/audio-tldr/scripts/transcribe.py "/path/to/recording.m4a"
+  ```
+
+  ```powershell
+  # Windows PowerShell
+  py -3 "$env:USERPROFILE\.claude\skills\audio-tldr\scripts\transcribe.py" "C:\path\to\recording.m4a"
+  ```
 
 ## Cache & configuration
 
@@ -183,10 +229,12 @@ python3 -m pytest tests/   # 18 unit tests, no network or model needed
 ## Status
 
 v0.1.0 — core logic is covered by 18 offline unit tests (yt-dlp, whisper backends, cache, and
-OpenCC are mocked; no network or models needed). The full flow has been manually verified on
-macOS with mlx-whisper (real YouTube download, transcription, cached re-digest, Chinese
-conversion). Not yet covered by automated tests: real downloads, the other three backends, and
-Windows. Possible next: SRT export, speaker diarization. Issues and PRs welcome.
+OpenCC are mocked; no network or models needed). The full flow has been manually verified once
+(2026-07-18) on macOS 26.5.1 / Apple M4 Pro with Python 3.12.13, mlx-whisper 0.4.3, ffmpeg 8.1,
+yt-dlp 2026.06.09 — real YouTube download, transcription, cached re-digest, and Chinese
+conversion; newer dependency versions may behave differently. Not yet covered by automated
+tests: real downloads, the other three backends, and Windows. Possible next: SRT export,
+speaker diarization. Issues and PRs welcome.
 
 ## License
 
