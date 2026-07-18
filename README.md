@@ -226,15 +226,27 @@ cd audio-tldr-skill
 python3 -m pytest tests/   # 18 unit tests, no network or model needed
 ```
 
+Versioning: every release bumps `version` in `.claude-plugin/plugin.json` **and**
+`.claude-plugin/marketplace.json` (kept identical) and adds a [CHANGELOG](./CHANGELOG.md) entry.
+
 ## Status
 
-v0.1.0 — core logic is covered by 18 offline unit tests (yt-dlp, whisper backends, cache, and
-OpenCC are mocked; no network or models needed). The full flow has been manually verified once
-(2026-07-18) on macOS 26.5.1 / Apple M4 Pro with Python 3.12.13, mlx-whisper 0.4.3, ffmpeg 8.1,
-yt-dlp 2026.06.09 — real YouTube download, transcription, cached re-digest, and Chinese
-conversion; newer dependency versions may behave differently. Not yet covered by automated
-tests: real downloads, the other three backends, and Windows. Possible next: SRT export,
-speaker diarization. Issues and PRs welcome.
+v0.2.0 ([CHANGELOG](./CHANGELOG.md)) — core logic is covered by 18 offline unit tests (yt-dlp,
+whisper backends, cache, and OpenCC are mocked; no network or models needed). The full flow has
+been manually verified once (2026-07-18, real YouTube download, transcription, cached re-digest,
+Chinese conversion) on:
+
+| Component | Verified version |
+|---|---|
+| macOS | 26.5.1 (Apple M4 Pro) |
+| Python | 3.12.13 |
+| mlx-whisper | 0.4.3 |
+| ffmpeg | 8.1 |
+| yt-dlp | 2026.06.09 |
+
+Newer dependency versions may behave differently. Not yet covered by automated tests: real
+downloads, the other three backends, and Windows. Possible next: SRT export, speaker
+diarization. Issues and PRs welcome.
 
 ## License
 

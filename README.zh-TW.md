@@ -210,13 +210,25 @@ cd audio-tldr-skill
 python3 -m pytest tests/   # 18 個單元測試，不需網路或模型
 ```
 
+版本規則：每次釋出必同步 bump `.claude-plugin/plugin.json` 與 `.claude-plugin/marketplace.json`
+的 `version`（兩者保持一致），並在 [CHANGELOG](./CHANGELOG.md) 加一筆。
+
 ## 狀態
 
-v0.1.0——核心邏輯有 18 個離線單元測試（yt-dlp、whisper 後端、快取、OpenCC 皆以 mock 模擬，
-不需網路或模型）。完整流程於 2026-07-18 在 macOS 26.5.1 / Apple M4 Pro、Python 3.12.13、
-mlx-whisper 0.4.3、ffmpeg 8.1、yt-dlp 2026.06.09 上人工驗證一次（真實 YouTube 下載、轉錄、
-快取重摘要、中文轉換）；依賴更新後行為可能不同。尚無自動化測試涵蓋：真實下載、其餘三個後端、
-Windows 環境。可能的下一步：SRT 字幕匯出、講者分離。歡迎開 issue 與 PR。
+v0.2.0（[CHANGELOG](./CHANGELOG.md)）——核心邏輯有 18 個離線單元測試（yt-dlp、whisper 後端、
+快取、OpenCC 皆以 mock 模擬，不需網路或模型）。完整流程於 2026-07-18 人工驗證一次
+（真實 YouTube 下載、轉錄、快取重摘要、中文轉換），環境如下：
+
+| 元件 | 驗證版本 |
+|---|---|
+| macOS | 26.5.1（Apple M4 Pro） |
+| Python | 3.12.13 |
+| mlx-whisper | 0.4.3 |
+| ffmpeg | 8.1 |
+| yt-dlp | 2026.06.09 |
+
+依賴更新後行為可能不同。尚無自動化測試涵蓋：真實下載、其餘三個後端、Windows 環境。
+可能的下一步：SRT 字幕匯出、講者分離。歡迎開 issue 與 PR。
 
 ## 授權
 
