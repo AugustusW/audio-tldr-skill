@@ -4,6 +4,14 @@ All notable changes to this project are documented here. **Every release bumps `
 `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` (kept identical) and adds an
 entry below.**
 
+## [0.3.3] - 2026-07-19
+
+### Changed
+- **OpenCC default config `s2tw` → `s2twp`** — Chinese transcripts now get Taiwan Traditional
+  **with common-phrase localization** (軟件→軟體, 信息→資訊, …), not just character-level
+  conversion. Override with `AUDIO_TLDR_ZH_CONVERT` as before (`s2tw` restores the old
+  behavior; `off` disables). Test suite: 54 offline unit tests
+
 ## [0.3.2] - 2026-07-19
 
 ### Added

@@ -4,6 +4,7 @@
 
 English | [繁體中文](./README.zh-TW.md)
 
+[![Release](https://img.shields.io/github/v/release/AugustusW/audio-tldr-skill?color=brightgreen)](https://github.com/AugustusW/audio-tldr-skill/releases)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](#prerequisites)
@@ -133,8 +134,9 @@ $env:AUDIO_TLDR_MODEL = "large-v3"    # persistent; PowerShell (bash/zsh: export
 ```
 
 **Optional — Traditional Chinese:** whisper often emits Simplified Chinese. `pip install opencc`
-and Chinese transcripts are converted to Taiwan Traditional automatically (plus the model is
-biased toward Traditional vocabulary). Not installed → transcripts are left as-is.
+and Chinese transcripts are converted to Taiwan Traditional automatically — including
+common-phrase localization (`s2twp`, e.g. 軟件→軟體) — plus the model is biased toward
+Traditional vocabulary. Not installed → transcripts are left as-is.
 
 ### Windows notes
 
@@ -278,7 +280,7 @@ Environment variables:
 |---|---|
 | `AUDIO_TLDR_MODEL` | override the whisper model for the active backend (`--model` beats it) |
 | `AUDIO_TLDR_WHISPER_CPP_MODEL` | path to a ggml model file (enables the whisper.cpp backend) |
-| `AUDIO_TLDR_ZH_CONVERT` | Chinese conversion: `off`, or an OpenCC config (default `s2tw`) |
+| `AUDIO_TLDR_ZH_CONVERT` | Chinese conversion: `off`, or an OpenCC config (default `s2twp` — Taiwan Traditional incl. common phrases) |
 | `AUDIO_TLDR_PYTHON` | pin the Python interpreter the script runs under (wins over auto-probing). Useful when your whisper backend lives in a non-default Python (e.g. Homebrew 3.12) |
 
 ## Develop
@@ -286,15 +288,19 @@ Environment variables:
 ```bash
 git clone https://github.com/AugustusW/audio-tldr-skill.git
 cd audio-tldr-skill
-python3 -m pytest tests/   # 53 unit tests, no network or model needed
+python3 -m pytest tests/   # 54 unit tests, no network or model needed
 ```
 
 Versioning: every release bumps `version` in `.claude-plugin/plugin.json` **and**
-`.claude-plugin/marketplace.json` (kept identical) and adds a [CHANGELOG](./CHANGELOG.md) entry.
+`.claude-plugin/marketplace.json` (kept identical), adds a [CHANGELOG](./CHANGELOG.md) entry,
+and is published as a git tag + [GitHub Release](https://github.com/AugustusW/audio-tldr-skill/releases).
+**To get update notifications**: Watch this repo (Custom → Releases), or — if you installed as a
+Claude Code plugin — run `/plugin` and update from the marketplace (it compares the version above).
+Manual-copy installs have no auto-update: re-copy the skill folder after a new release.
 
 ## Status
 
-v0.3.2 ([CHANGELOG](./CHANGELOG.md)) — core logic is covered by 53 offline unit tests (yt-dlp,
+v0.3.3 ([CHANGELOG](./CHANGELOG.md)) — core logic is covered by 54 offline unit tests (yt-dlp,
 whisper backends, cache, and OpenCC are mocked; no network or models needed). The full flow has
 been manually verified (2026-07-19: real YouTube download, transcription, cached re-digest,
 Chinese conversion, `--keep-audio`, output-folder digests in md/html, transcript translation,

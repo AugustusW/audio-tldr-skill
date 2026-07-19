@@ -1,7 +1,7 @@
 {
   "name": "audio-tldr",
   "description": "Summarize videos, audio files, and podcasts into key takeaways with local, cached transcription.",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "author": { "name": "AugustusW", "url": "https://github.com/AugustusW" },
   "license": "MIT",
   "keywords": ["audio", "podcast", "youtube", "summary", "transcription", "whisper", "tldr"]

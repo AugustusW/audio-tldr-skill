@@ -4,6 +4,7 @@
 
 [English](./README.md) | 繁體中文
 
+[![Release](https://img.shields.io/github/v/release/AugustusW/audio-tldr-skill?color=brightgreen)](https://github.com/AugustusW/audio-tldr-skill/releases)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](#前置準備)
@@ -125,8 +126,8 @@ python3 scripts/transcribe.py --model small "<來源>"   # 單次
 $env:AUDIO_TLDR_MODEL = "large-v3"    # 長期；PowerShell（bash/zsh 用 export AUDIO_TLDR_MODEL=large-v3）
 ```
 
-**選配——繁體中文**：whisper 對中文常輸出簡體。`pip install opencc` 之後，中文逐字稿自動轉台灣繁體
-（並以 prompt 引導模型優先用繁體詞彙）；沒裝就維持原樣。
+**選配——繁體中文**：whisper 對中文常輸出簡體。`pip install opencc` 之後，中文逐字稿自動轉台灣繁體——含慣用語在地化（`s2twp`，例：軟件→軟體）——並以 prompt
+引導模型優先用繁體詞彙；沒裝就維持原樣。
 
 ### Windows 注意事項
 
@@ -256,7 +257,7 @@ model: large-v3
 |---|---|
 | `AUDIO_TLDR_MODEL` | 覆蓋目前後端的 whisper 模型（`--model` 優先） |
 | `AUDIO_TLDR_WHISPER_CPP_MODEL` | ggml 模型檔路徑（啟用 whisper.cpp 後端） |
-| `AUDIO_TLDR_ZH_CONVERT` | 中文轉換：`off`，或任何 OpenCC 設定（預設 `s2tw`） |
+| `AUDIO_TLDR_ZH_CONVERT` | 中文轉換：`off`，或任何 OpenCC 設定（預設 `s2twp`——台灣繁體含慣用語） |
 | `AUDIO_TLDR_PYTHON` | 指定執行的 Python interpreter（優先於自動探測）。whisper backend 裝在非預設 Python（如 homebrew 3.12）時適用 |
 
 ## 開發
@@ -264,15 +265,19 @@ model: large-v3
 ```bash
 git clone https://github.com/AugustusW/audio-tldr-skill.git
 cd audio-tldr-skill
-python3 -m pytest tests/   # 53 個單元測試，不需網路或模型
+python3 -m pytest tests/   # 54 個單元測試，不需網路或模型
 ```
 
 版本規則：每次釋出必同步 bump `.claude-plugin/plugin.json` 與 `.claude-plugin/marketplace.json`
-的 `version`（兩者保持一致），並在 [CHANGELOG](./CHANGELOG.md) 加一筆。
+的 `version`（兩者保持一致）、在 [CHANGELOG](./CHANGELOG.md) 加一筆，並打 git tag 發
+[GitHub Release](https://github.com/AugustusW/audio-tldr-skill/releases)。
+**想收到更新通知**：Watch 本 repo（Custom → Releases）；用 Claude Code plugin 安裝的話，
+跑 `/plugin` 從 marketplace 更新（它比對上述 version）。手動複製安裝沒有自動更新——
+新版釋出後重新複製 skill 資料夾即可。
 
 ## 狀態
 
-v0.3.2（[CHANGELOG](./CHANGELOG.md)）——核心邏輯有 53 個離線單元測試（yt-dlp、whisper 後端、
+v0.3.3（[CHANGELOG](./CHANGELOG.md)）——核心邏輯有 54 個離線單元測試（yt-dlp、whisper 後端、
 快取、OpenCC 皆以 mock 模擬，不需網路或模型）。完整流程於 2026-07-19 人工驗證
 （真實 YouTube 下載、轉錄、快取重摘要、中文轉換、`--keep-audio`、output 資料夾 md/html 摘要、
 逐字稿翻譯、從 `/usr/bin/python3` 的 interpreter 自動切換、Apple Podcasts fallback 端到端——

@@ -7,7 +7,7 @@
       "name": "audio-tldr",
       "source": "./",
       "description": "Summarize videos, audio files, and podcasts into key takeaways with local, cached transcription.",
-      "version": "0.3.2"
+      "version": "0.3.3"
     }
   ]
 }

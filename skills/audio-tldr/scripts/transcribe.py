@@ -489,7 +489,8 @@ def _collapse_repetitions(text: str) -> str:
 
 # ── Chinese output normalization (optional) ─────────────────────────
 # Whisper often emits Simplified Chinese. If the `opencc` package is installed,
-# Chinese transcripts are converted (default config: s2tw -> Taiwan Traditional).
+# Chinese transcripts are converted (default config: s2twp -> Taiwan Traditional
+# incl. common-phrase localization, e.g. 軟件->軟體).
 # Set AUDIO_TLDR_ZH_CONVERT=off to disable, or to any OpenCC config (s2t, s2twp, t2s, ...).
 # No opencc installed -> transcripts are left untouched.
 _ZH_PROMPT = "以下是用繁體中文記錄的對話內容。"
@@ -499,7 +500,7 @@ _OPENCC = None  # lazy: None=untried, False=unavailable/disabled
 def _get_zh_converter():
     global _OPENCC
     if _OPENCC is None:
-        cfg = os.environ.get("AUDIO_TLDR_ZH_CONVERT", "s2tw")
+        cfg = os.environ.get("AUDIO_TLDR_ZH_CONVERT", "s2twp")
         if cfg.lower() in ("off", "0", "none"):
             _OPENCC = False
         else:

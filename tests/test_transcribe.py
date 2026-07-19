@@ -589,3 +589,17 @@ def test_resolve_model_cli_beats_env(monkeypatch):
     monkeypatch.setenv("AUDIO_TLDR_MODEL", "medium")
     assert transcribe.resolve_model("faster-whisper", "large-v3") == "large-v3"
     assert transcribe.resolve_model("faster-whisper", None) == "medium"
+
+
+# ── OpenCC default config (v0.3.3) ──────────────────────────────────
+
+def test_zh_convert_default_is_s2twp(monkeypatch):
+    import sys, types
+    seen = {}
+    fake = types.ModuleType("opencc")
+    fake.OpenCC = lambda cfg: seen.setdefault("cfg", cfg) or object()
+    monkeypatch.setitem(sys.modules, "opencc", fake)
+    monkeypatch.delenv("AUDIO_TLDR_ZH_CONVERT", raising=False)
+    monkeypatch.setattr(transcribe, "_OPENCC", None)  # reset lazy cache
+    transcribe._get_zh_converter()
+    assert seen["cfg"] == "s2twp"
