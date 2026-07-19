@@ -5,11 +5,13 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
@@ -95,6 +97,226 @@ def detect_backend():
     if shutil.which("whisper"):
         return "openai-whisper"
     return None
+
+
+# ── Python interpreter selection ────────────────────────────────────
+# Backend detection only sees the *current* interpreter. On hosts where a
+# whisper backend lives in another Python (e.g. Homebrew 3.12 while the agent
+# invoked /usr/bin/python3), re-exec into the interpreter that has it instead
+# of misreporting "no backend installed". Nothing is ever installed here.
+_REEXEC_ENV = "AUDIO_TLDR_REEXECED"
+
+
+def _module_backend_in(python: str) -> bool:
+    try:
+        r = subprocess.run(
+            [python, "-c",
+             "import importlib.util as i, sys; "
+             "sys.exit(0 if (i.find_spec('mlx_whisper') or i.find_spec('faster_whisper')) else 1)"],
+            capture_output=True, timeout=15)
+        return r.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def _candidate_interpreters():
+    cands = []
+    env_py = os.environ.get("AUDIO_TLDR_PYTHON")
+    if env_py:
+        cands.append(env_py)
+    cands += ["/opt/homebrew/bin/python3.13", "/opt/homebrew/bin/python3.12",
+              "/opt/homebrew/bin/python3", "/usr/local/bin/python3"]
+    for name in ("python3.13", "python3.12", "python3.11"):
+        w = shutil.which(name)
+        if w:
+            cands.append(w)
+    seen, out = set(), []
+    for c in cands:
+        if not Path(c).exists():
+            continue
+        p = os.path.realpath(c)
+        if p not in seen:
+            seen.add(p)
+            out.append(c)
+    return out
+
+
+def _honor_explicit_python(raw_argv):
+    """AUDIO_TLDR_PYTHON set -> always run under that interpreter (highest priority)."""
+    env_py = os.environ.get("AUDIO_TLDR_PYTHON")
+    if not env_py or os.environ.get(_REEXEC_ENV):
+        return
+    if Path(env_py).exists() and os.path.realpath(env_py) != os.path.realpath(sys.executable):
+        os.environ[_REEXEC_ENV] = "1"
+        os.execv(env_py, [env_py, os.path.abspath(__file__)] + list(raw_argv))
+
+
+def _maybe_reexec(raw_argv):
+    """No module backend here -> switch to a candidate interpreter that has one."""
+    if os.environ.get(_REEXEC_ENV):
+        return
+    cur = os.path.realpath(sys.executable)
+    for cand in _candidate_interpreters():
+        if os.path.realpath(cand) == cur:
+            continue
+        if _module_backend_in(cand):
+            os.environ[_REEXEC_ENV] = "1"
+            print(f"note: whisper backend found in {cand}; switching interpreter "
+                  f"(set AUDIO_TLDR_PYTHON to override)", file=sys.stderr)
+            os.execv(cand, [cand, os.path.abspath(__file__)] + list(raw_argv))
+
+
+def cmd_doctor() -> int:
+    """Environment diagnosis: distinguish 'not installed' from 'installed in
+    another Python' from 'importable but Metal blocked (sandbox)'."""
+    import platform
+    info = {
+        "python": {"path": sys.executable, "version": platform.python_version()},
+        "tools": {"yt_dlp": bool(shutil.which("yt-dlp")), "ffmpeg": bool(shutil.which("ffmpeg"))},
+        "backends": {
+            "mlx_whisper": _module_available("mlx_whisper"),
+            "faster_whisper": _module_available("faster_whisper"),
+            "whisper_cpp": bool(shutil.which("whisper-cli"))
+                           and bool(os.environ.get("AUDIO_TLDR_WHISPER_CPP_MODEL")),
+            "openai_whisper": bool(shutil.which("whisper")),
+        },
+        "opencc": _module_available("opencc"),
+        "selected_backend": detect_backend(),
+        "other_interpreters": [],
+        "metal": None,
+    }
+    cur = os.path.realpath(sys.executable)
+    for cand in _candidate_interpreters():
+        if os.path.realpath(cand) == cur:
+            continue
+        info["other_interpreters"].append(
+            {"path": cand, "module_backend": _module_backend_in(cand)})
+    if _module_available("mlx_whisper"):
+        try:
+            r = subprocess.run(
+                [sys.executable, "-c", "import mlx.core as mx; mx.default_device()"],
+                capture_output=True, text=True, timeout=30)
+            info["metal"] = {"available": r.returncode == 0,
+                             "error": None if r.returncode == 0
+                             else (r.stderr.strip()[-300:] or "Metal init failed")}
+        except (OSError, subprocess.TimeoutExpired) as e:
+            info["metal"] = {"available": False, "error": str(e)}
+    print(json.dumps(info, ensure_ascii=False, indent=2))
+    return 0
+
+
+# ── Apple Podcasts fallback ─────────────────────────────────────────
+# yt-dlp's ApplePodcasts extractor is flaky (observed HTTP 500 on valid pages).
+# Fallback: episode id -> iTunes lookup -> public episodeUrl (or RSS enclosure).
+# The enclosure is transport only — cache identity stays on the Apple URL.
+
+def _apple_ids(url: str):
+    p = urlparse(url)
+    if p.netloc.lower() != "podcasts.apple.com":
+        return None
+    m = re.search(r"/id(\d+)", p.path)
+    coll = m.group(1) if m else None
+    ep = dict(parse_qsl(p.query)).get("i")
+    # storefront country is the first path segment (/tw/podcast/...) — the
+    # lookup API misses region-specific shows without it
+    seg = p.path.strip("/").split("/", 1)[0]
+    country = seg if len(seg) == 2 and seg.isalpha() else None
+    return (coll, ep, country)
+
+
+def _lookup_json(url: str) -> dict:
+    req = urllib.request.Request(url, headers={"User-Agent": "audio-tldr"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read().decode())
+
+
+def _enclosure_from_feed(feed_url: str, title: str):
+    try:
+        req = urllib.request.Request(feed_url, headers={"User-Agent": "audio-tldr"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            xml_text = r.read().decode(errors="replace")
+    except OSError:
+        return None
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return None
+    for item in root.iter("item"):
+        if (item.findtext("title") or "").strip() == title.strip():
+            enc = item.find("enclosure")
+            if enc is not None:
+                return enc.get("url")
+    return None
+
+
+def _resolve_show_to_latest(source: str):
+    """Apple show-page URL (no ?i=) -> (canonical latest-episode URL, episode title).
+    Returns (source, None) for anything that is not an Apple show page.
+    Rewriting happens BEFORE cache-key computation so the cache binds to the
+    episode — next week the same show link resolves to the new latest episode
+    instead of hitting a stale cache entry."""
+    ids = _apple_ids(source)
+    if ids is None:
+        return source, None
+    coll, ep, country = ids
+    if ep or not coll:
+        return source, None
+    q = f"https://itunes.apple.com/lookup?id={coll}&entity=podcastEpisode&limit=200"
+    if country:
+        q += f"&country={country}"
+    try:
+        data = _lookup_json(q)
+    except (OSError, ValueError) as e:
+        raise DownloadError(f"Apple lookup failed: {e}")
+    episodes = [r for r in data.get("results", [])
+                if r.get("kind") != "podcast" and r.get("trackId")]
+    if not episodes:
+        raise DownloadError("Apple Podcasts: no episodes found for this show")
+    latest = max(episodes, key=lambda r: r.get("releaseDate") or "")
+    sep = "&" if "?" in source else "?"
+    return f"{source}{sep}i={latest['trackId']}", latest.get("trackName") or "untitled"
+
+
+def resolve_apple_podcast(url: str):
+    """Apple Podcasts page URL -> (media_url, episode_title).
+    Returns None for non-Apple URLs; raises DownloadError with a specific
+    reason when an Apple URL cannot be resolved."""
+    ids = _apple_ids(url)
+    if ids is None:
+        return None
+    coll, ep, country = ids
+    if not ep:
+        raise DownloadError(
+            "Apple Podcasts: this is a show page, not an episode link — open the "
+            "episode and copy its link (it needs ?i=<episodeId>)")
+    if not coll:
+        raise DownloadError("Apple Podcasts: could not parse the show id from the URL")
+    # Episode-id lookup returns 0 results even with a storefront; the reliable
+    # path is collection lookup listing recent episodes, then matching trackId.
+    q = f"https://itunes.apple.com/lookup?id={coll}&entity=podcastEpisode&limit=200"
+    if country:
+        q += f"&country={country}"
+    try:
+        data = _lookup_json(q)
+    except (OSError, ValueError) as e:
+        raise DownloadError(f"Apple lookup failed: {e}")
+    hits = [r for r in data.get("results", []) if str(r.get("trackId")) == str(ep)]
+    if not hits:
+        raise DownloadError(
+            "Apple lookup: episode not found in the show's recent episodes "
+            "(removed, region-locked, subscriber-only, or older than the 200-episode "
+            "lookup window — paste the episode's RSS/media URL directly instead)")
+    r0 = hits[0]
+    title = r0.get("trackName") or "untitled"
+    media = r0.get("episodeUrl")
+    if not media and r0.get("feedUrl"):
+        media = _enclosure_from_feed(r0["feedUrl"], title)
+    if not media:
+        raise DownloadError(
+            "Apple Podcasts: no public media URL for this episode "
+            "(subscriber-only content cannot be fetched)")
+    return media, title
 
 
 def load_cached(key: str):
@@ -328,6 +550,8 @@ def _run_backend(backend, audio_path, language):
 
 
 def main(argv=None):
+    raw_argv = list(argv) if argv is not None else sys.argv[1:]
+    _honor_explicit_python(raw_argv)
     ap = argparse.ArgumentParser(description="audio-tldr transcription engine")
     ap.add_argument("source", nargs="?", help="URL or local audio/video file path")
     ap.add_argument("--language", default=None)
@@ -338,8 +562,14 @@ def main(argv=None):
     ap.add_argument("--yes", action="store_true", help="confirm --clear-all")
     ap.add_argument("--set-retention", metavar="DAYS",
                     help="auto-prune entries older than DAYS on each run; 'off' = keep forever (default)")
-    args = ap.parse_args(argv)
+    ap.add_argument("--keep-audio", action="store_true",
+                    help="keep the downloaded audio in the cache entry instead of deleting it (URL sources)")
+    ap.add_argument("--doctor", action="store_true",
+                    help="diagnose the environment (python, backends, tools, other interpreters, Metal) as JSON")
+    args = ap.parse_args(raw_argv)
 
+    if args.doctor:
+        return cmd_doctor()
     if args.cache_info:
         return cmd_cache_info()
     if args.clear:
@@ -356,27 +586,69 @@ def main(argv=None):
         print(f"source not found: {args.source}", file=sys.stderr)
         return 2
 
+    if is_url(args.source):
+        try:
+            new_src, latest_title = _resolve_show_to_latest(args.source)
+        except DownloadError as e:
+            print(str(e), file=sys.stderr)
+            return 2
+        if new_src != args.source:
+            print(f"note: Apple Podcasts show page → using the latest episode: {latest_title}",
+                  file=sys.stderr)
+            args.source = new_src
+
     prune_expired()  # no-op unless the user configured a retention
     key = cache_key(args.source)
     if not args.force:
         meta = load_cached(key)
         if meta:
+            if args.keep_audio and not meta.get("audio_path"):
+                print("note: --keep-audio ignored on cache hit (transcript already cached; "
+                      "re-run with --force to download and keep the audio)", file=sys.stderr)
             print(json.dumps({**meta, "cache_hit": True}, ensure_ascii=False))
             return 0
 
     backend = detect_backend()
     if backend is None:
+        _maybe_reexec(raw_argv)  # switches interpreter (never returns) if one has a backend
         print(INSTALL_GUIDE, file=sys.stderr)
+        print("tip: run --doctor to see which interpreters/tools were probed",
+              file=sys.stderr)
         return 3
 
     title = Path(args.source).stem
     audio_path = args.source
     tmpdir = None
+    kept_audio = None
+    media_url = None
+    d = cache_dir() / key
     try:
         if is_url(args.source):
             tmpdir = tempfile.mkdtemp(prefix="audio-tldr-dl-")
-            audio_path, title = download_audio(args.source, Path(tmpdir))
+            try:
+                audio_path, title = download_audio(args.source, Path(tmpdir))
+            except DownloadError:
+                resolved = resolve_apple_podcast(args.source)
+                if resolved is None:
+                    raise
+                media_url, ep_title = resolved
+                print("note: Apple Podcasts extractor failed; falling back to the "
+                      "episode's public media URL (cache identity stays on the Apple link)",
+                      file=sys.stderr)
+                audio_path, dl_title = download_audio(media_url, Path(tmpdir))
+                title = ep_title or dl_title
         text, duration, lang = _run_backend(backend, audio_path, args.language)
+        if args.keep_audio and tmpdir:
+            # Audio retention is an optional side-effect: its failure must never
+            # discard the (potentially expensive) transcription that already succeeded.
+            try:
+                d.mkdir(parents=True, exist_ok=True)
+                kept_audio = d / "audio.mp3"
+                shutil.move(audio_path, kept_audio)
+            except OSError as e:
+                print(f"warning: could not keep audio ({e}); continuing without it",
+                      file=sys.stderr)
+                kept_audio = None
     except DownloadError as e:
         print(str(e), file=sys.stderr)
         return 2
@@ -394,12 +666,19 @@ def main(argv=None):
             shutil.rmtree(tmpdir, ignore_errors=True)
 
     text = _maybe_to_traditional(text, lang)
-    d = cache_dir() / key
     d.mkdir(parents=True, exist_ok=True)
     t_path = d / "transcript.txt"
     t_path.write_text(text)
     meta = {"transcript_path": str(t_path), "title": title, "duration": duration,
             "language": lang, "backend": backend, "source": args.source}
+    if media_url:
+        meta["media_url"] = media_url  # transport URL actually fetched (Apple fallback)
+    if kept_audio is None and (d / "audio.mp3").exists():
+        # Previously kept audio (e.g. a --force re-run without --keep-audio):
+        # never delete user-kept data, keep referencing it instead of orphaning it.
+        kept_audio = d / "audio.mp3"
+    if kept_audio is not None:
+        meta["audio_path"] = str(kept_audio)
     (d / "meta.json").write_text(json.dumps(meta, ensure_ascii=False))
     print(json.dumps({**meta, "cache_hit": False}, ensure_ascii=False))
     return 0

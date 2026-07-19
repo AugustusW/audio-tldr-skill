@@ -4,6 +4,57 @@ All notable changes to this project are documented here. **Every release bumps `
 `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` (kept identical) and adds an
 entry below.**
 
+## [0.3.0] - 2026-07-19
+
+### Added
+- **Output folder** — every digest is saved as a file under `./audio-tldr-output/`
+  (configurable); transcripts and audio stay in the cache, the output folder holds digests only
+- **Conversational digest prompt** — when a request doesn't say how to digest, the agent asks
+  in plain text (key takeaways / meeting minutes / detailed summary / action items / Q&A /
+  translation / free description). Never a clickable menu — works over plain-text messaging
+  channels
+- **Translation** — digests in any requested language, plus full-transcript translation as a
+  digest style (faithful, chunked for long content, saved to the output folder)
+- **Markdown or HTML output** — per-request choice, or the `output_format` preference
+  (default `md`); HTML output is a single self-contained file
+- **User preferences** — optional `~/.config/audio-tldr/preferences.md` (`output_dir`,
+  `timeline`, `auto_delete_audio`, `output_format`), shared across agents; defaults work with
+  no setup and the install never asks
+- **`--keep-audio`** — keep the downloaded mp3 in the cache entry (default still deletes it
+  after transcription); exposed via the `auto_delete_audio` preference
+- **Codex support** — portable skill-path wording in SKILL.md, `agents/openai.yaml` metadata,
+  and Codex install instructions; cache and preferences are shared with Claude Code
+- **Interpreter auto-selection** (from Codex end-to-end validation) — when the invoking Python
+  lacks a whisper backend, the script probes common interpreters (Homebrew python3.12/3.13, …)
+  and transparently re-execs into one that has it; `AUDIO_TLDR_PYTHON` pins one explicitly.
+  Fixes the "backend installed but in another Python" misdiagnosis
+- **`--doctor`** — JSON environment diagnosis: Python path/version, backend & tool visibility,
+  other interpreters with a backend, MLX Metal availability (distinguishes "not installed" /
+  "installed elsewhere" / "importable but sandbox blocks Metal")
+- **Apple Podcasts fallback** — yt-dlp's ApplePodcasts extractor can fail (observed HTTP 500);
+  episodes now resolve via the iTunes lookup API (collection + storefront country, trackId
+  match, RSS enclosure as last resort). The enclosure is transport only: cache identity and
+  `source` stay on the original Apple link, `title` uses the episode name, and `media_url`
+  records what was actually fetched. A show-page link (no `?i=`) automatically resolves to the
+  show's latest episode, with the cache bound to that episode's URL. Specific errors for
+  lookup failures and subscriber-only content
+- **Codex sandbox guidance** in SKILL.md — backend importable but Metal blocked means a sandbox
+  permission issue, not a broken install; agents are told to request approved execution instead
+  of reinstalling
+
+### Changed
+- `--keep-audio` hardening (from pre-release review): a failed audio move never discards the
+  completed transcription (warning on stderr instead); a `--force` re-run without the flag
+  preserves and re-references previously kept audio instead of orphaning it; requesting
+  `--keep-audio` on a cache hit prints a stderr note instead of silently ignoring the flag
+- Output filename slug rule tightened to a strict character allowlist, and metadata is
+  explicitly barred from influencing the write destination (prompt-injection surface)
+- Privacy docs now cover the output folder (persistent digests incl. translations, no retention,
+  `.gitignore` advice)
+- Test suite grown to 39 offline unit tests (`--keep-audio` keep / default-delete / local-file
+  no-op / `--clear` removes kept audio / move-failure resilience / `--force` preservation /
+  cache-hit note / cache-info size)
+
 ## [0.2.0] - 2026-07-18
 
 ### Added

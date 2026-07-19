@@ -1,0 +1,3 @@
+display_name: audio-tldr
+description: Summarize videos, audio files, and podcasts into key takeaways with local, cached transcription.
+allow_implicit_invocation: true

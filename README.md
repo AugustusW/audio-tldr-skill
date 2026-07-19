@@ -40,7 +40,13 @@ re-upload, re-transcribe, re-pay      transcribe once, reuse from cache
 - ✓ Language auto-detection; optional Simplified→Traditional Chinese conversion (OpenCC)
 - ✓ Cache management built in: list, clear one, clear all, opt-in retention
 - ✓ Timeline for long content (> 20 min)
-- ✓ Install by copy **or** as a Claude Code plugin
+- ✓ Digests saved to an output folder as Markdown or HTML — transcripts stay in the cache
+- ✓ Conversational digest prompt: no request stated? The agent asks in plain text (key takeaways / meeting minutes / detailed summary / action items / Q&A / translation / your own words)
+- ✓ Translation at the digest layer: digests in any language, or a faithful full-transcript translation
+- ✓ Optional preferences file for standing habits — zero setup required
+- ✓ Interpreter auto-selection: backend installed in another Python (e.g. Homebrew) is found and used automatically; `--doctor` diagnoses the environment
+- ✓ Apple Podcasts fallback built in: when yt-dlp's extractor fails, episodes resolve via the iTunes lookup API — cache identity stays on your original link; a show link (no episode id) automatically uses the latest episode
+- ✓ Install by copy, as a Claude Code plugin, **or** into Codex (open SKILL.md standard)
 
 ## Install
 
@@ -61,6 +67,22 @@ Invoke with `/audio-tldr`, or just ask Claude to summarize a video — it auto-t
 ```
 
 Invoke with `/audio-tldr:audio-tldr`. Both options can coexist — plugin skills are namespaced.
+
+**Option C — Codex CLI / ChatGPT app:**
+
+The skill follows the open SKILL.md standard, so it works in Codex as-is. Copy the skill
+folder into Codex's skills directory:
+
+```bash
+git clone https://github.com/AugustusW/audio-tldr-skill.git
+cp -r audio-tldr-skill/skills/audio-tldr ~/.codex/skills/audio-tldr        # personal
+# or, per-project: cp -r audio-tldr-skill/skills/audio-tldr <repo>/.codex/skills/audio-tldr
+```
+
+Invoke it with a `$audio-tldr` mention, or let Codex pick it implicitly when you ask to
+summarize audio/video. The transcript cache (`~/.cache/audio-tldr/`) and the preferences file
+(`~/.config/audio-tldr/preferences.md`) are shared with Claude Code — transcribe once, digest
+anywhere.
 
 ## Prerequisites
 
@@ -165,9 +187,12 @@ Two phases, deliberately separated:
    content hash), returns instantly on a hit; otherwise downloads via yt-dlp, transcribes with
    the best available whisper backend, and caches `transcript.txt` + `meta.json` under
    `~/.cache/audio-tldr/<sha256>/`.
-2. **Digest** — Claude reads the cached transcript and produces takeaways, a summary, and (for
-   long content) an approximate timeline. Re-digesting with a different focus skips phase 1
-   entirely.
+2. **Digest** — the agent reads the cached transcript and produces takeaways, a summary, and
+   (for long content) an approximate timeline. If your request didn't say how to digest, it
+   asks first — in plain conversational text, never a clickable menu, so it works over
+   plain-text messaging channels too. Every digest is also saved to the output folder
+   (default `./audio-tldr-output/`) as `<title>-<date>-<style>.md` (or `.html`).
+   Re-digesting with a different focus skips phase 1 entirely.
 
 ## Privacy
 
@@ -182,6 +207,10 @@ Be precise about what stays local and what doesn't:
 - **Cached transcripts are unencrypted plaintext, kept indefinitely by default**, under
   `~/.cache/audio-tldr/`. After processing sensitive content, `--clear` that entry, or configure
   a retention period.
+- **Digests persist in the output folder** (default `./audio-tldr-output/`, relative to your
+  working directory) — including full-transcript translations, which carry essentially the whole
+  transcript. The output folder has no clearing or retention mechanism; delete files manually,
+  and add the folder to `.gitignore` if you run the skill inside a git-tracked directory.
 - **Phase 1 only (sensitive recordings):** transcribe without ever handing the text to Claude —
   run the script yourself; stdout is metadata JSON only, and the transcript stays at the
   returned `transcript_path` until you delete it:
@@ -196,6 +225,28 @@ Be precise about what stays local and what doesn't:
   py -3 "$env:USERPROFILE\.claude\skills\audio-tldr\scripts\transcribe.py" "C:\path\to\recording.m4a"
   ```
 
+## Preferences (optional)
+
+Create `~/.config/audio-tldr/preferences.md` to set standing habits — every field is optional
+and everything works without the file:
+
+```markdown
+output_dir: ~/Documents/audio-digests
+timeline: off
+auto_delete_audio: off
+output_format: html
+```
+
+| field | default | meaning |
+|---|---|---|
+| `output_dir` | `./audio-tldr-output` | where digest files are saved |
+| `timeline` | `on` | include a timeline section in digests when content warrants it |
+| `auto_delete_audio` | `on` | delete downloaded audio after transcription; `off` keeps the mp3 in the cache entry |
+| `output_format` | `md` | digest file format, `md` or `html`; a per-request choice always wins |
+
+The file is read by the agent (Claude Code and Codex share it) — the install never asks you to
+set it up, and defaults apply whenever it's absent.
+
 ## Cache & configuration
 
 The cache is **kept forever by default** — nothing is auto-deleted unless you opt in.
@@ -209,6 +260,8 @@ Ask Claude, or run `scripts/transcribe.py` directly:
 | `--clear-all --yes` | delete everything |
 | `--set-retention <days>` | auto-prune entries older than N days (`off` = keep forever) |
 | `--force` | re-transcribe one source, ignoring cache |
+| `--keep-audio` | keep the downloaded mp3 in the cache entry (default deletes it after transcription) |
+| `--doctor` | JSON environment diagnosis: Python path/version, backend & tool visibility, other interpreters that have a backend, MLX Metal availability |
 
 Environment variables:
 
@@ -217,13 +270,14 @@ Environment variables:
 | `AUDIO_TLDR_MODEL` | override the whisper model for the active backend |
 | `AUDIO_TLDR_WHISPER_CPP_MODEL` | path to a ggml model file (enables the whisper.cpp backend) |
 | `AUDIO_TLDR_ZH_CONVERT` | Chinese conversion: `off`, or an OpenCC config (default `s2tw`) |
+| `AUDIO_TLDR_PYTHON` | pin the Python interpreter the script runs under (wins over auto-probing). Useful when your whisper backend lives in a non-default Python (e.g. Homebrew 3.12) |
 
 ## Develop
 
 ```bash
 git clone https://github.com/AugustusW/audio-tldr-skill.git
 cd audio-tldr-skill
-python3 -m pytest tests/   # 18 unit tests, no network or model needed
+python3 -m pytest tests/   # 39 unit tests, no network or model needed
 ```
 
 Versioning: every release bumps `version` in `.claude-plugin/plugin.json` **and**
@@ -231,10 +285,13 @@ Versioning: every release bumps `version` in `.claude-plugin/plugin.json` **and*
 
 ## Status
 
-v0.2.0 ([CHANGELOG](./CHANGELOG.md)) — core logic is covered by 18 offline unit tests (yt-dlp,
+v0.3.0 ([CHANGELOG](./CHANGELOG.md)) — core logic is covered by 39 offline unit tests (yt-dlp,
 whisper backends, cache, and OpenCC are mocked; no network or models needed). The full flow has
-been manually verified once (2026-07-18, real YouTube download, transcription, cached re-digest,
-Chinese conversion) on:
+been manually verified (2026-07-19: real YouTube download, transcription, cached re-digest,
+Chinese conversion, `--keep-audio`, output-folder digests in md/html, transcript translation,
+interpreter auto-selection from `/usr/bin/python3`, and the Apple Podcasts fallback end-to-end —
+a real 53-min episode resolved via iTunes lookup, transcribed, and cache-hit on the original
+Apple URL) on:
 
 | Component | Verified version |
 |---|---|
@@ -245,7 +302,8 @@ Chinese conversion) on:
 | yt-dlp | 2026.06.09 |
 
 Newer dependency versions may behave differently. Not yet covered by automated tests: real
-downloads, the other three backends, and Windows. Possible next: SRT export, speaker
+downloads, the other three backends, and Windows. Codex support follows the open SKILL.md
+standard; end-to-end verification inside Codex is pending. Possible next: SRT export, speaker
 diarization. Issues and PRs welcome.
 
 ## License

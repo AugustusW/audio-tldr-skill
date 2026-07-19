@@ -198,3 +198,296 @@ def test_load_cached_hit(tmp_path, monkeypatch):
     (d / "meta.json").write_text(json.dumps({"transcript_path": str(t), "title": "x"}))
     got = transcribe.load_cached("cafebabe")
     assert got["title"] == "x"
+
+
+def _fake_transcription(monkeypatch, tmp_path):
+    """Stub download + backend so main() runs the URL path without network/whisper."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setattr(transcribe, "detect_backend", lambda: "mlx-whisper")
+
+    def fake_download(url, workdir):
+        p = workdir / "t.mp3"
+        p.write_bytes(b"audio-bytes")
+        return str(p), "Fake Title"
+
+    monkeypatch.setattr(transcribe, "download_audio", fake_download)
+    monkeypatch.setattr(transcribe, "_run_backend", lambda b, a, l: ("hello", 12.3, "en"))
+
+
+def test_keep_audio_moves_mp3_into_cache_entry(monkeypatch, tmp_path, capsys):
+    _fake_transcription(monkeypatch, tmp_path)
+    rc = transcribe.main(["https://youtu.be/keepme", "--keep-audio"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    key = transcribe.cache_key("https://youtu.be/keepme")
+    audio = tmp_path / "audio-tldr" / key / "audio.mp3"
+    assert audio.exists() and audio.read_bytes() == b"audio-bytes"
+    assert out["audio_path"] == str(audio)
+
+
+def test_default_deletes_downloaded_audio(monkeypatch, tmp_path, capsys):
+    _fake_transcription(monkeypatch, tmp_path)
+    rc = transcribe.main(["https://youtu.be/dropme"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    key = transcribe.cache_key("https://youtu.be/dropme")
+    assert not (tmp_path / "audio-tldr" / key / "audio.mp3").exists()
+    assert "audio_path" not in out
+
+
+def test_keep_audio_noop_for_local_file(monkeypatch, tmp_path, capsys):
+    _fake_transcription(monkeypatch, tmp_path)
+    src = tmp_path / "local.mp3"
+    src.write_bytes(b"local-bytes")
+    rc = transcribe.main([str(src), "--keep-audio"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert "audio_path" not in out          # 本機檔不搬（使用者自己的檔案本來就在）
+    assert src.exists()                     # 原檔不動
+
+
+def test_clear_removes_kept_audio(monkeypatch, tmp_path, capsys):
+    _fake_transcription(monkeypatch, tmp_path)
+    transcribe.main(["https://youtu.be/clearme", "--keep-audio"])
+    capsys.readouterr()
+    transcribe.cmd_clear("https://youtu.be/clearme")
+    key = transcribe.cache_key("https://youtu.be/clearme")
+    assert not (tmp_path / "audio-tldr" / key).exists()
+
+
+def test_keep_audio_move_failure_preserves_transcript(monkeypatch, tmp_path, capsys):
+    _fake_transcription(monkeypatch, tmp_path)
+    def failing_move(src, dst):
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(transcribe.shutil, "move", failing_move)
+    rc = transcribe.main(["https://youtu.be/nospace", "--keep-audio"])
+    captured = capsys.readouterr()
+    assert rc == 0                                   # 轉錄成果不因留檔失敗而毀
+    out = json.loads(captured.out)
+    assert "audio_path" not in out
+    assert "could not keep audio" in captured.err
+    key = transcribe.cache_key("https://youtu.be/nospace")
+    assert (tmp_path / "audio-tldr" / key / "transcript.txt").exists()
+
+
+def test_force_rerun_preserves_previously_kept_audio(monkeypatch, tmp_path, capsys):
+    _fake_transcription(monkeypatch, tmp_path)
+    transcribe.main(["https://youtu.be/keepthenforce", "--keep-audio"])
+    capsys.readouterr()
+    rc = transcribe.main(["https://youtu.be/keepthenforce", "--force"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    key = transcribe.cache_key("https://youtu.be/keepthenforce")
+    audio = tmp_path / "audio-tldr" / key / "audio.mp3"
+    assert audio.exists()                            # 使用者留存的音檔不被 --force 抹掉
+    assert out["audio_path"] == str(audio)           # meta 重新引用，不產孤兒
+
+
+def test_keep_audio_cache_hit_notes_stderr(monkeypatch, tmp_path, capsys):
+    _fake_transcription(monkeypatch, tmp_path)
+    transcribe.main(["https://youtu.be/hitnote"])
+    capsys.readouterr()
+    rc = transcribe.main(["https://youtu.be/hitnote", "--keep-audio"])
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert json.loads(captured.out)["cache_hit"] is True
+    assert "cache hit" in captured.err               # 靜默 no-op → 有跡可循
+
+
+def test_cache_info_size_includes_kept_audio(monkeypatch, tmp_path, capsys):
+    _fake_transcription(monkeypatch, tmp_path)
+    transcribe.main(["https://youtu.be/sized", "--keep-audio"])
+    capsys.readouterr()
+    transcribe.cmd_cache_info()
+    info = json.loads(capsys.readouterr().out)
+    entry = next(e for e in info["entries"] if e["source"] == "https://youtu.be/sized")
+    assert entry["size_bytes"] >= len(b"audio-bytes")  # rglob 計入 audio.mp3
+
+
+# ── Codex validation P0: interpreter auto-selection ──────────────────
+
+def test_reexec_when_backend_in_other_interpreter(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.delenv("AUDIO_TLDR_REEXECED", raising=False)
+    monkeypatch.delenv("AUDIO_TLDR_PYTHON", raising=False)
+    monkeypatch.setattr(transcribe, "detect_backend", lambda: None)
+    monkeypatch.setattr(transcribe, "_candidate_interpreters", lambda: ["/fake/python312"])
+    monkeypatch.setattr(transcribe, "_module_backend_in", lambda p: True)
+    calls = []
+    def fake_execv(path, argv):
+        calls.append((path, argv))
+        raise RuntimeError("execv called")   # 真 execv 不返回，用例外模擬
+    monkeypatch.setattr(transcribe.os, "execv", fake_execv)
+    src = tmp_path / "a.mp3"
+    src.write_bytes(b"x")
+    try:
+        transcribe.main([str(src)])
+        assert False, "should have re-exec'd"
+    except RuntimeError:
+        pass
+    assert calls and calls[0][0] == "/fake/python312"
+    assert str(src) in calls[0][1]
+
+
+def test_no_reexec_when_guard_set(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setenv("AUDIO_TLDR_REEXECED", "1")
+    monkeypatch.delenv("AUDIO_TLDR_PYTHON", raising=False)
+    monkeypatch.setattr(transcribe, "detect_backend", lambda: None)
+    monkeypatch.setattr(transcribe, "_module_backend_in", lambda p: True)
+    src = tmp_path / "a.mp3"
+    src.write_bytes(b"x")
+    rc = transcribe.main([str(src)])
+    assert rc == 3          # loop guard：不再切換，走 install guide
+
+
+def test_explicit_python_env_reexec(monkeypatch, tmp_path):
+    monkeypatch.delenv("AUDIO_TLDR_REEXECED", raising=False)
+    fake_py = tmp_path / "mypython"
+    fake_py.write_text("#!/bin/sh\n")
+    monkeypatch.setenv("AUDIO_TLDR_PYTHON", str(fake_py))
+    calls = []
+    def fake_execv(path, argv):
+        calls.append(path)
+        raise RuntimeError("execv called")
+    monkeypatch.setattr(transcribe.os, "execv", fake_execv)
+    try:
+        transcribe.main(["--cache-info"])
+        assert False, "should have re-exec'd into AUDIO_TLDR_PYTHON"
+    except RuntimeError:
+        pass
+    assert calls == [str(fake_py)]
+
+
+# ── Codex validation P0: --doctor ────────────────────────────────────
+
+def test_doctor_reports_environment(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.delenv("AUDIO_TLDR_PYTHON", raising=False)
+    monkeypatch.setattr(transcribe, "_module_available", lambda m: False)
+    monkeypatch.setattr(transcribe, "_candidate_interpreters", lambda: ["/fake/py"])
+    monkeypatch.setattr(transcribe, "_module_backend_in", lambda p: True)
+    rc = transcribe.main(["--doctor"])
+    assert rc == 0
+    info = json.loads(capsys.readouterr().out)
+    assert info["python"]["path"] and info["python"]["version"]
+    for k in ("mlx_whisper", "faster_whisper", "whisper_cpp", "openai_whisper"):
+        assert k in info["backends"]
+    assert "yt_dlp" in info["tools"] and "ffmpeg" in info["tools"]
+    assert info["other_interpreters"] == [{"path": "/fake/py", "module_backend": True}]
+    assert "selected_backend" in info and "metal" in info
+
+
+# ── Codex validation P0: Apple Podcasts resolver ─────────────────────
+
+def test_apple_ids_parsing():
+    coll, ep, country = transcribe._apple_ids(
+        "https://podcasts.apple.com/tw/podcast/ep679/id1500839292?i=1000776880208")
+    assert coll == "1500839292" and ep == "1000776880208" and country == "tw"
+    assert transcribe._apple_ids("https://youtu.be/abc") is None
+
+
+def test_resolve_apple_show_page_needs_episode():
+    try:
+        transcribe.resolve_apple_podcast("https://podcasts.apple.com/tw/podcast/id1500839292")
+        assert False
+    except transcribe.DownloadError as e:
+        assert "episode" in str(e)
+
+
+def test_resolve_apple_lookup_success(monkeypatch):
+    seen_urls = []
+    def fake_lookup(url):
+        seen_urls.append(url)
+        return {"results": [
+            {"kind": "podcast", "collectionId": 150, "feedUrl": "https://feed.example/rss"},
+            {"trackId": 1000776880208, "trackName": "EP679",
+             "episodeUrl": "https://rss.soundon.fm/x.mp3",
+             "feedUrl": "https://feed.example/rss"}]}
+    monkeypatch.setattr(transcribe, "_lookup_json", fake_lookup)
+    media, title = transcribe.resolve_apple_podcast(
+        "https://podcasts.apple.com/tw/podcast/ep/id150?i=1000776880208")
+    assert media == "https://rss.soundon.fm/x.mp3" and title == "EP679"
+    assert "id=150" in seen_urls[0]                # collection lookup（單集 id 直查回 0）
+    assert "country=tw" in seen_urls[0]            # storefront 必帶，否則台區節目查不到
+
+
+def test_resolve_apple_episode_not_found(monkeypatch):
+    monkeypatch.setattr(transcribe, "_lookup_json", lambda url: {"results": []})
+    try:
+        transcribe.resolve_apple_podcast("https://podcasts.apple.com/tw/podcast/ep/id150?i=99")
+        assert False
+    except transcribe.DownloadError as e:
+        assert "not found" in str(e)
+
+
+def test_apple_fallback_keeps_source_identity(monkeypatch, tmp_path, capsys):
+    _fake_transcription(monkeypatch, tmp_path)
+    apple_url = "https://podcasts.apple.com/tw/podcast/ep/id150?i=42"
+    calls = []
+    def failing_then_ok(url, workdir):
+        calls.append(url)
+        if url == apple_url:
+            raise transcribe.DownloadError("yt-dlp probe failed: HTTP Error 500")
+        p = workdir / "e.mp3"
+        p.write_bytes(b"audio-bytes")
+        return str(p), "uuid-title"
+    monkeypatch.setattr(transcribe, "download_audio", failing_then_ok)
+    monkeypatch.setattr(transcribe, "resolve_apple_podcast",
+                        lambda u: ("https://cdn.example/ep42.mp3", "EP42 Title"))
+    rc = transcribe.main([apple_url])
+    captured = capsys.readouterr()
+    assert rc == 0
+    out = json.loads(captured.out)
+    assert out["source"] == apple_url                      # cache 識別不斷鏈
+    assert out["title"] == "EP42 Title"                    # 標題用 episode 名非 UUID
+    assert out["media_url"] == "https://cdn.example/ep42.mp3"
+    assert transcribe.cache_key(apple_url) in out["transcript_path"]
+    assert calls == [apple_url, "https://cdn.example/ep42.mp3"]
+
+
+def test_non_apple_download_error_reraises(monkeypatch, tmp_path, capsys):
+    _fake_transcription(monkeypatch, tmp_path)
+    def failing(url, workdir):
+        raise transcribe.DownloadError("boom")
+    monkeypatch.setattr(transcribe, "download_audio", failing)
+    rc = transcribe.main(["https://youtu.be/xyz"])
+    assert rc == 2
+    assert "boom" in capsys.readouterr().err
+
+
+def test_show_page_resolves_to_latest_episode(monkeypatch, tmp_path, capsys):
+    _fake_transcription(monkeypatch, tmp_path)
+    show_url = "https://podcasts.apple.com/tw/podcast/gooaye/id150"
+    monkeypatch.setattr(transcribe, "_lookup_json", lambda url: {"results": [
+        {"kind": "podcast", "collectionId": 150},
+        {"kind": "podcast-episode", "trackId": 111, "trackName": "EP1",
+         "releaseDate": "2026-07-01T00:00:00Z"},
+        {"kind": "podcast-episode", "trackId": 222, "trackName": "EP2",
+         "releaseDate": "2026-07-18T00:00:00Z"}]})
+    rc = transcribe.main([show_url])
+    captured = capsys.readouterr()
+    assert rc == 0
+    out = json.loads(captured.out)
+    assert out["source"] == show_url + "?i=222"      # cache 識別綁最新單集，非節目頁
+    assert "latest episode" in captured.err and "EP2" in captured.err
+    assert transcribe.cache_key(show_url + "?i=222") in out["transcript_path"]
+
+
+def test_show_page_lookup_failure_exit2(monkeypatch, tmp_path, capsys):
+    _fake_transcription(monkeypatch, tmp_path)
+    def boom(url):
+        raise OSError("network down")
+    monkeypatch.setattr(transcribe, "_lookup_json", boom)
+    rc = transcribe.main(["https://podcasts.apple.com/tw/podcast/gooaye/id150"])
+    assert rc == 2
+    assert "Apple lookup failed" in capsys.readouterr().err
+
+
+def test_show_page_no_episodes_exit2(monkeypatch, tmp_path, capsys):
+    _fake_transcription(monkeypatch, tmp_path)
+    monkeypatch.setattr(transcribe, "_lookup_json",
+                        lambda url: {"results": [{"kind": "podcast", "collectionId": 150}]})
+    rc = transcribe.main(["https://podcasts.apple.com/tw/podcast/gooaye/id150"])
+    assert rc == 2
+    assert "no episodes" in capsys.readouterr().err
