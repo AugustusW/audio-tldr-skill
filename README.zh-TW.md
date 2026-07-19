@@ -8,8 +8,11 @@
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](#前置準備)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-skill%20%2B%20plugin-orange.svg)](https://claude.com/claude-code)
+[![Codex](https://img.shields.io/badge/Codex-compatible-black.svg)](https://developers.openai.com/codex/skills)
 
-一個 [Claude Code](https://claude.com/claude-code) skill：把長影音內容濃縮成 **3–7 條重點 + 一段摘要**。
+一個 agent skill——採開放 [SKILL.md 標準](https://developers.openai.com/codex/skills)，
+[Claude Code](https://claude.com/claude-code) 與 [Codex](https://developers.openai.com/codex/skills) **皆可用**——
+把長影音內容濃縮成 **3–7 條重點 + 一段摘要**。
 轉錄用 whisper 在本機執行，以內容 hash 快取——快取存在期間，同一來源**預設不會重新轉錄**
 （除非 `--force`）；之後要求換角度重新摘要，直接吃快取、幾秒完成。
 

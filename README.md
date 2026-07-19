@@ -8,8 +8,11 @@ English | [繁體中文](./README.zh-TW.md)
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](#prerequisites)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-skill%20%2B%20plugin-orange.svg)](https://claude.com/claude-code)
+[![Codex](https://img.shields.io/badge/Codex-compatible-black.svg)](https://developers.openai.com/codex/skills)
 
-A [Claude Code](https://claude.com/claude-code) skill that turns long-form media into **3–7 key
+An agent skill — open [SKILL.md standard](https://developers.openai.com/codex/skills), works in
+[Claude Code](https://claude.com/claude-code) **and** [Codex](https://developers.openai.com/codex/skills) —
+that turns long-form media into **3–7 key
 takeaways + a summary**. Transcription runs locally with whisper and is cached by content hash —
 while a cache entry exists, the same source is **not transcribed again** (unless you `--force`).
 Ask for a different angle later and it re-digests from cache in seconds.
