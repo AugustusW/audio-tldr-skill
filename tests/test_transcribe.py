@@ -491,3 +491,68 @@ def test_show_page_no_episodes_exit2(monkeypatch, tmp_path, capsys):
     rc = transcribe.main(["https://podcasts.apple.com/tw/podcast/gooaye/id150"])
     assert rc == 2
     assert "no episodes" in capsys.readouterr().err
+
+
+# ── Apple canonical cache identity (v0.3.1) ─────────────────────────
+
+def test_cache_key_apple_slug_invariant():
+    # Same episode reached via show-page resolution (show slug) vs a directly
+    # copied episode link (episode-title slug) must share one cache entry.
+    via_show = transcribe.cache_key(
+        "https://podcasts.apple.com/tw/podcast/gooaye/id1500839292?i=1000776880208")
+    via_episode = transcribe.cache_key(
+        "https://podcasts.apple.com/tw/podcast/ep679-%E8%82%A1%E7%99%8C/id1500839292?i=1000776880208")
+    assert via_show == via_episode
+
+
+def test_cache_key_apple_storefront_invariant():
+    tw = transcribe.cache_key(
+        "https://podcasts.apple.com/tw/podcast/gooaye/id1500839292?i=1000776880208")
+    us = transcribe.cache_key(
+        "https://podcasts.apple.com/us/podcast/gooaye/id1500839292?i=1000776880208")
+    assert tw == us
+
+
+def test_cache_key_apple_different_episodes_differ():
+    a = transcribe.cache_key(
+        "https://podcasts.apple.com/tw/podcast/gooaye/id1500839292?i=1000776880208")
+    b = transcribe.cache_key(
+        "https://podcasts.apple.com/tw/podcast/gooaye/id1500839292?i=1000776880209")
+    assert a != b
+
+
+def test_cache_key_apple_show_page_without_episode_falls_back():
+    # A bare show page (no ?i=) has no episode identity — keep URL-based key.
+    a = transcribe.cache_key("https://podcasts.apple.com/tw/podcast/gooaye/id1500839292")
+    b = transcribe.cache_key("https://podcasts.apple.com/tw/podcast/other/id1500839292")
+    assert a != b
+
+
+# ── Repetition collapse (v0.3.1) ────────────────────────────────────
+
+def test_collapse_repeated_tail_phrase():
+    text = "正常內容講完了。" + "謝謝大家收看。" * 20
+    out = transcribe._collapse_repetitions(text)
+    assert out == "正常內容講完了。謝謝大家收看。"
+
+
+def test_collapse_repeated_space_joined_segments():
+    text = "Real content here. " + " ".join(["Thanks for watching"] * 10)
+    out = transcribe._collapse_repetitions(text)
+    assert out == "Real content here. Thanks for watching"
+
+
+def test_collapse_keeps_double_repeats():
+    text = "很好 很好 接下來進正題"
+    assert transcribe._collapse_repetitions(text) == text
+
+
+def test_collapse_leaves_normal_text_untouched(monkeypatch):
+    text = "今天聊三件事：第一，市場；第二，財報；第三，展望。"
+    assert transcribe._collapse_repetitions(text) == text
+
+
+def test_collapse_disabled_by_env(monkeypatch):
+    monkeypatch.setenv("AUDIO_TLDR_DEREPEAT", "off")
+    text = "尾端幻覺。" * 10
+    assert transcribe._collapse_repetitions(text) == text

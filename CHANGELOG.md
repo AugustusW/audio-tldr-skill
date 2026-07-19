@@ -4,6 +4,28 @@ All notable changes to this project are documented here. **Every release bumps `
 `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` (kept identical) and adds an
 entry below.**
 
+## [0.3.1] - 2026-07-19
+
+### Fixed
+- **Apple Podcasts cache identity is now slug- and storefront-independent** — the cache key for
+  an Apple episode URL derives from (collection id, episode id) only. Previously the URL path
+  slug participated in the key, so the same episode reached via show-page resolution (show-name
+  slug) vs a directly copied episode link (episode-title slug) produced two cache entries and
+  a duplicate transcription. Existing cache entries keyed under the old scheme are not
+  migrated — the first re-run of an Apple source transcribes once into the new key
+- **Whisper tail-repetition hallucination collapse** — runs of 3+ consecutive identical phrases
+  (the classic decoder loop on trailing silence/music) are collapsed to a single occurrence
+  before caching, with a stderr note showing how many characters were removed. Two repeats are
+  left untouched (legitimate emphasis). Opt out with `AUDIO_TLDR_DEREPEAT=off`
+- **README status corrected** — the Status section claimed Codex end-to-end verification was
+  pending; the transcription core was in fact verified inside Codex on 2026-07-19 (real 53-min
+  podcast, including the interpreter auto-selection path). The section now states precisely
+  what was verified where: digest-layer features remain Claude Code-verified only
+
+### Changed
+- Test suite grown to 48 offline unit tests (Apple canonical cache identity ×4, repetition
+  collapse ×5)
+
 ## [0.3.0] - 2026-07-19
 
 ### Added

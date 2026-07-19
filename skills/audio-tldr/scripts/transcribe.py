@@ -32,9 +32,26 @@ def _normalize_url(url: str) -> str:
     return urlunparse((p.scheme, p.netloc.lower(), p.path.rstrip("/"), "", urlencode(q), ""))
 
 
+def _canonical_apple(url: str):
+    """Apple episode URL -> slug/storefront-independent identity string.
+    The path slug differs between a show-page resolution (show name) and a
+    directly copied episode link (episode title), and the storefront segment
+    varies by region — none of that changes which episode it is. Identity is
+    (collection id, episode id) only. Returns None when there is no episode id
+    (bare show page) or the URL is not Apple Podcasts."""
+    ids = _apple_ids(url)
+    if ids is None:
+        return None
+    coll, ep, _country = ids
+    if coll and ep:
+        return f"https://podcasts.apple.com/podcast/id{coll}?i={ep}"
+    return None
+
+
 def cache_key(source: str) -> str:
     if is_url(source):
-        return hashlib.sha256(_normalize_url(source).encode()).hexdigest()
+        canon = _canonical_apple(source) or _normalize_url(source)
+        return hashlib.sha256(canon.encode()).hexdigest()
     h = hashlib.sha256()
     with open(source, "rb") as f:
         for chunk in iter(lambda: f.read(1 << 20), b""):
@@ -451,6 +468,25 @@ def cmd_set_retention(value: str) -> int:
     return 0
 
 
+# ── Repetition collapse ─────────────────────────────────────────────
+# Whisper's decoder can loop on trailing silence/music, emitting the same
+# phrase dozens of times (classic tail hallucination). Collapse runs of 3+
+# consecutive identical phrases to one occurrence; 2 repeats are left alone
+# (legit emphasis). Set AUDIO_TLDR_DEREPEAT=off to disable.
+_REPEAT_RE = re.compile(r"(\S.{1,119}?)(?:\s*\1){2,}", re.S)
+
+
+def _collapse_repetitions(text: str) -> str:
+    if not text or os.environ.get("AUDIO_TLDR_DEREPEAT", "").lower() in ("off", "0", "none"):
+        return text
+    for _ in range(10):  # fixpoint: nested loops (ABAB ABAB) need re-passes
+        collapsed = _REPEAT_RE.sub(r"\1", text)
+        if collapsed == text:
+            break
+        text = collapsed
+    return text
+
+
 # ── Chinese output normalization (optional) ─────────────────────────
 # Whisper often emits Simplified Chinese. If the `opencc` package is installed,
 # Chinese transcripts are converted (default config: s2tw -> Taiwan Traditional).
@@ -665,6 +701,12 @@ def main(argv=None):
         if tmpdir:
             shutil.rmtree(tmpdir, ignore_errors=True)
 
+    deduped = _collapse_repetitions(text)
+    if deduped != text:
+        print(f"note: collapsed repeated phrases ({len(text) - len(deduped)} chars removed — "
+              f"likely whisper tail hallucination; AUDIO_TLDR_DEREPEAT=off to disable)",
+              file=sys.stderr)
+        text = deduped
     text = _maybe_to_traditional(text, lang)
     d.mkdir(parents=True, exist_ok=True)
     t_path = d / "transcript.txt"

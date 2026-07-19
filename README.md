@@ -280,7 +280,7 @@ Environment variables:
 ```bash
 git clone https://github.com/AugustusW/audio-tldr-skill.git
 cd audio-tldr-skill
-python3 -m pytest tests/   # 39 unit tests, no network or model needed
+python3 -m pytest tests/   # 48 unit tests, no network or model needed
 ```
 
 Versioning: every release bumps `version` in `.claude-plugin/plugin.json` **and**
@@ -288,7 +288,7 @@ Versioning: every release bumps `version` in `.claude-plugin/plugin.json` **and*
 
 ## Status
 
-v0.3.0 ([CHANGELOG](./CHANGELOG.md)) — core logic is covered by 39 offline unit tests (yt-dlp,
+v0.3.1 ([CHANGELOG](./CHANGELOG.md)) — core logic is covered by 48 offline unit tests (yt-dlp,
 whisper backends, cache, and OpenCC are mocked; no network or models needed). The full flow has
 been manually verified (2026-07-19: real YouTube download, transcription, cached re-digest,
 Chinese conversion, `--keep-audio`, output-folder digests in md/html, transcript translation,
@@ -306,8 +306,11 @@ Apple URL) on:
 
 Newer dependency versions may behave differently. Not yet covered by automated tests: real
 downloads, the other three backends, and Windows. Codex support follows the open SKILL.md
-standard; end-to-end verification inside Codex is pending. Possible next: SRT export, speaker
-diarization. Issues and PRs welcome.
+standard; the transcription core was verified end-to-end inside Codex on 2026-07-19 (a real
+53-min podcast downloaded, transcribed, and cache-hit, including the interpreter
+auto-selection path). Digest-layer features (output folder, translation, preferences) have so
+far been exercised in Claude Code only. Possible next: SRT export, speaker diarization.
+Issues and PRs welcome.
 
 ## License
 
