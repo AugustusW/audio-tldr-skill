@@ -211,7 +211,7 @@ def _fake_transcription(monkeypatch, tmp_path):
         return str(p), "Fake Title"
 
     monkeypatch.setattr(transcribe, "download_audio", fake_download)
-    monkeypatch.setattr(transcribe, "_run_backend", lambda b, a, l: ("hello", 12.3, "en"))
+    monkeypatch.setattr(transcribe, "_run_backend", lambda b, a, l, m=None: ("hello", 12.3, "en"))
 
 
 def test_keep_audio_moves_mp3_into_cache_entry(monkeypatch, tmp_path, capsys):
@@ -556,3 +556,36 @@ def test_collapse_disabled_by_env(monkeypatch):
     monkeypatch.setenv("AUDIO_TLDR_DEREPEAT", "off")
     text = "尾端幻覺。" * 10
     assert transcribe._collapse_repetitions(text) == text
+
+
+# ── Model selection (--model flag, v0.3.2) ──────────────────────────
+
+def test_resolve_model_default_turbo(monkeypatch):
+    monkeypatch.delenv("AUDIO_TLDR_MODEL", raising=False)
+    assert transcribe.resolve_model("mlx-whisper", None) == "mlx-community/whisper-large-v3-turbo"
+    assert transcribe.resolve_model("faster-whisper", None) == "large-v3-turbo"
+    assert transcribe.resolve_model("openai-whisper", None) == "large-v3-turbo"
+
+
+def test_resolve_model_short_name_maps_per_backend(monkeypatch):
+    monkeypatch.delenv("AUDIO_TLDR_MODEL", raising=False)
+    assert transcribe.resolve_model("mlx-whisper", "small") == "mlx-community/whisper-small"
+    assert transcribe.resolve_model("faster-whisper", "small") == "small"
+
+
+def test_resolve_model_whisper_prefix_normalized(monkeypatch):
+    monkeypatch.delenv("AUDIO_TLDR_MODEL", raising=False)
+    assert transcribe.resolve_model("faster-whisper", "whisper-large-v3-turbo") == "large-v3-turbo"
+    assert transcribe.resolve_model("mlx-whisper", "whisper-large-v3-turbo") == \
+        "mlx-community/whisper-large-v3-turbo"
+
+
+def test_resolve_model_full_repo_path_passthrough(monkeypatch):
+    monkeypatch.delenv("AUDIO_TLDR_MODEL", raising=False)
+    assert transcribe.resolve_model("mlx-whisper", "someone/custom-whisper") == "someone/custom-whisper"
+
+
+def test_resolve_model_cli_beats_env(monkeypatch):
+    monkeypatch.setenv("AUDIO_TLDR_MODEL", "medium")
+    assert transcribe.resolve_model("faster-whisper", "large-v3") == "large-v3"
+    assert transcribe.resolve_model("faster-whisper", None) == "medium"

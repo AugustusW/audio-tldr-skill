@@ -19,6 +19,7 @@ field means "use the default". All fields are optional, written as `key: value` 
 | `timeline` | `on` | `on` = include a timeline section when the content warrants it; `off` = never include one |
 | `auto_delete_audio` | `on` | `on` = downloaded audio is deleted after transcription; `off` = pass `--keep-audio` in Phase 1 so the mp3 stays in the cache entry |
 | `output_format` | `md` | digest file format, `md` or `html`; an explicit per-request choice always wins over this field |
+| `model` | `large-v3-turbo` | whisper model for Phase 1 — when set, pass it as `--model <value>`; an explicit per-request model always wins over this field |
 
 Do not proactively ask the user to set up this file — the defaults work out of the box. If the
 user expresses a lasting habit in conversation ("always skip the timeline"), offer once to save
@@ -36,7 +37,10 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/transcribe.py" "<URL or file path>"
 On other agents (e.g. Codex), build the path from wherever you loaded this file. On Windows,
 replace `python3` with `python` or `py -3`.
 
-Optional flags: `--language zh` (force language), `--force` (ignore cache), `--keep-audio`
+Optional flags: `--language zh` (force language), `--model <name>` (whisper model — default
+`large-v3-turbo`; bare names map per backend. Pass it when the user asks for a specific model,
+complains about speed/quality, or the `model` preference is set — per-request ask beats the
+preference), `--force` (ignore cache), `--keep-audio`
 (keep the downloaded mp3 in the cache entry — pass it when the `auto_delete_audio` preference
 is `off`), `--doctor` (environment diagnosis as JSON).
 
@@ -51,7 +55,7 @@ stderr note names which one, and the cache binds to that episode's URL (so the s
 picks up the new latest episode next time, and pasting the episode link directly hits the same
 cache entry).
 
-The script prints one JSON line: `{transcript_path, title, duration, language, backend, cache_hit}` (plus `audio_path` when `--keep-audio` kept a download).
+The script prints one JSON line: `{transcript_path, title, duration, language, backend, model, cache_hit}` (plus `audio_path` when `--keep-audio` kept a download).
 
 **Exit codes — handle them, don't guess:**
 - `0` OK → proceed to Phase 2.

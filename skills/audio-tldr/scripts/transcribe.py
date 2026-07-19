@@ -516,11 +516,24 @@ def _maybe_to_traditional(text, language):
     return conv.convert(text) if conv and text else text
 
 
-DEFAULT_MODELS = {
-    "mlx-whisper": os.environ.get("AUDIO_TLDR_MODEL", "mlx-community/whisper-large-v3-turbo"),
-    "faster-whisper": os.environ.get("AUDIO_TLDR_MODEL", "small"),
-    "openai-whisper": os.environ.get("AUDIO_TLDR_MODEL", "small"),
-}
+DEFAULT_MODEL = "large-v3-turbo"
+
+
+def resolve_model(backend: str, cli_model):
+    """Pick the whisper model: --model > AUDIO_TLDR_MODEL env > large-v3-turbo.
+    Accepts canonical names (large-v3-turbo), whisper-prefixed names
+    (whisper-large-v3-turbo), or a full HF repo path (kept as-is). mlx needs a
+    repo path, so bare names get the mlx-community/whisper- prefix; the other
+    backends take canonical names directly. whisper-cpp ignores this entirely
+    (its model is the AUDIO_TLDR_WHISPER_CPP_MODEL file)."""
+    name = cli_model or os.environ.get("AUDIO_TLDR_MODEL") or DEFAULT_MODEL
+    if "/" in name:
+        return name
+    if name.startswith("whisper-"):
+        name = name[len("whisper-"):]
+    if backend == "mlx-whisper":
+        return f"mlx-community/whisper-{name}"
+    return name
 
 INSTALL_GUIDE = """No whisper backend found. Install ONE of:
   Apple Silicon (fastest):  pip install mlx-whisper
@@ -530,13 +543,14 @@ INSTALL_GUIDE = """No whisper backend found. Install ONE of:
 Also required: yt-dlp + ffmpeg for URL sources."""
 
 
-def _run_backend(backend, audio_path, language):
+def _run_backend(backend, audio_path, language, model_name=None):
     # When zh conversion is active, bias models toward Traditional vocabulary.
     # Safe for non-Chinese audio (prompt does not affect en/ja/... generation).
     zh_prompt = _ZH_PROMPT if _get_zh_converter() else None
+    model_id = resolve_model(backend, model_name)
     if backend == "mlx-whisper":
         import mlx_whisper
-        kw = {"path_or_hf_repo": DEFAULT_MODELS[backend]}
+        kw = {"path_or_hf_repo": model_id}
         if language:
             kw["language"] = language
         if zh_prompt:
@@ -546,7 +560,7 @@ def _run_backend(backend, audio_path, language):
         return r["text"].strip(), dur, r.get("language", language or "")
     if backend == "faster-whisper":
         from faster_whisper import WhisperModel
-        model = WhisperModel(DEFAULT_MODELS[backend])
+        model = WhisperModel(model_id)
         segments, info = model.transcribe(audio_path, language=language,
                                           initial_prompt=zh_prompt)
         segs = list(segments)
@@ -571,7 +585,7 @@ def _run_backend(backend, audio_path, language):
     if backend == "openai-whisper":
         outdir = tempfile.mkdtemp(prefix="audio-tldr-")
         try:
-            cmd = ["whisper", audio_path, "--model", DEFAULT_MODELS[backend],
+            cmd = ["whisper", audio_path, "--model", model_id,
                    "--output_format", "txt", "--output_dir", outdir]
             if language:
                 cmd += ["--language", language]
@@ -591,6 +605,10 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="audio-tldr transcription engine")
     ap.add_argument("source", nargs="?", help="URL or local audio/video file path")
     ap.add_argument("--language", default=None)
+    ap.add_argument("--model", default=None,
+                    help="whisper model (default: large-v3-turbo; also via AUDIO_TLDR_MODEL). "
+                         "Bare names map per backend (mlx gets the mlx-community/ prefix); "
+                         "a full HF repo path is used as-is. Ignored by whisper-cpp")
     ap.add_argument("--force", action="store_true", help="ignore cache, re-transcribe")
     ap.add_argument("--cache-info", action="store_true", help="list cached transcripts (JSON)")
     ap.add_argument("--clear", metavar="SOURCE", help="delete the cache entry for one source")
@@ -673,7 +691,7 @@ def main(argv=None):
                       file=sys.stderr)
                 audio_path, dl_title = download_audio(media_url, Path(tmpdir))
                 title = ep_title or dl_title
-        text, duration, lang = _run_backend(backend, audio_path, args.language)
+        text, duration, lang = _run_backend(backend, audio_path, args.language, args.model)
         if args.keep_audio and tmpdir:
             # Audio retention is an optional side-effect: its failure must never
             # discard the (potentially expensive) transcription that already succeeded.
@@ -711,8 +729,11 @@ def main(argv=None):
     d.mkdir(parents=True, exist_ok=True)
     t_path = d / "transcript.txt"
     t_path.write_text(text)
+    model_used = (os.environ.get("AUDIO_TLDR_WHISPER_CPP_MODEL", "")
+                  if backend == "whisper-cpp" else resolve_model(backend, args.model))
     meta = {"transcript_path": str(t_path), "title": title, "duration": duration,
-            "language": lang, "backend": backend, "source": args.source}
+            "language": lang, "backend": backend, "model": model_used,
+            "source": args.source}
     if media_url:
         meta["media_url"] = media_url  # transport URL actually fetched (Apple fallback)
     if kept_audio is None and (d / "audio.mp3").exists():

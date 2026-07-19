@@ -103,9 +103,9 @@ Whisper backends, in the order the skill auto-detects them:
 | Backend | Best for | Install | Default model |
 |---|---|---|---|
 | [mlx-whisper](https://pypi.org/project/mlx-whisper/) | Apple Silicon (fastest) | `pip install mlx-whisper` | `large-v3-turbo` |
-| [faster-whisper](https://pypi.org/project/faster-whisper/) | Cross-platform GPU/CPU | `pip install faster-whisper` | `small` |
+| [faster-whisper](https://pypi.org/project/faster-whisper/) | Cross-platform GPU/CPU | `pip install faster-whisper` | `large-v3-turbo` |
 | [whisper.cpp](https://github.com/ggerganov/whisper.cpp) | CPU, no Python deps | `brew install whisper-cpp` + set `AUDIO_TLDR_WHISPER_CPP_MODEL` | (your model file) |
-| [openai-whisper](https://pypi.org/project/openai-whisper/) | Original CLI | `pip install openai-whisper` | `small` |
+| [openai-whisper](https://pypi.org/project/openai-whisper/) | Original CLI | `pip install openai-whisper` | `large-v3-turbo` |
 
 Local files don't need `yt-dlp` — only a whisper backend.
 
@@ -114,8 +114,11 @@ with the source site's terms and your local copyright law.
 
 ### Choosing a model
 
-The defaults favor safety over quality on CPU (`small` everywhere except mlx). Override with
-`AUDIO_TLDR_MODEL` — the name must be valid for your active backend:
+The default is `large-v3-turbo` on every backend (whisper.cpp excepted — its model is the
+`AUDIO_TLDR_WHISPER_CPP_MODEL` file). On CPU-only machines this favors quality over speed —
+drop to `small` if transcription is too slow. Override per run with `--model`, or persistently
+with `AUDIO_TLDR_MODEL` (the flag wins). Bare names are mapped per backend (mlx gets the
+`mlx-community/whisper-` prefix automatically; a full HF repo path is used as-is):
 
 | Situation | Suggested model |
 |---|---|
@@ -125,7 +128,8 @@ The defaults favor safety over quality on CPU (`small` everywhere except mlx). O
 | Capable GPU, speed + quality | `large-v3` or `large-v3-turbo` |
 
 ```powershell
-$env:AUDIO_TLDR_MODEL = "large-v3"    # PowerShell; bash/zsh: export AUDIO_TLDR_MODEL=large-v3
+python3 scripts/transcribe.py --model small "<source>"   # per run
+$env:AUDIO_TLDR_MODEL = "large-v3"    # persistent; PowerShell (bash/zsh: export AUDIO_TLDR_MODEL=large-v3)
 ```
 
 **Optional — Traditional Chinese:** whisper often emits Simplified Chinese. `pip install opencc`
@@ -238,6 +242,7 @@ output_dir: ~/Documents/audio-digests
 timeline: off
 auto_delete_audio: off
 output_format: html
+model: large-v3
 ```
 
 | field | default | meaning |
@@ -246,6 +251,7 @@ output_format: html
 | `timeline` | `on` | include a timeline section in digests when content warrants it |
 | `auto_delete_audio` | `on` | delete downloaded audio after transcription; `off` keeps the mp3 in the cache entry |
 | `output_format` | `md` | digest file format, `md` or `html`; a per-request choice always wins |
+| `model` | `large-v3-turbo` | whisper model for transcription (passed as `--model`); a per-request choice always wins |
 
 The file is read by the agent (Claude Code and Codex share it) — the install never asks you to
 set it up, and defaults apply whenever it's absent.
@@ -270,7 +276,7 @@ Environment variables:
 
 | Variable | Purpose |
 |---|---|
-| `AUDIO_TLDR_MODEL` | override the whisper model for the active backend |
+| `AUDIO_TLDR_MODEL` | override the whisper model for the active backend (`--model` beats it) |
 | `AUDIO_TLDR_WHISPER_CPP_MODEL` | path to a ggml model file (enables the whisper.cpp backend) |
 | `AUDIO_TLDR_ZH_CONVERT` | Chinese conversion: `off`, or an OpenCC config (default `s2tw`) |
 | `AUDIO_TLDR_PYTHON` | pin the Python interpreter the script runs under (wins over auto-probing). Useful when your whisper backend lives in a non-default Python (e.g. Homebrew 3.12) |
@@ -280,7 +286,7 @@ Environment variables:
 ```bash
 git clone https://github.com/AugustusW/audio-tldr-skill.git
 cd audio-tldr-skill
-python3 -m pytest tests/   # 48 unit tests, no network or model needed
+python3 -m pytest tests/   # 53 unit tests, no network or model needed
 ```
 
 Versioning: every release bumps `version` in `.claude-plugin/plugin.json` **and**
@@ -288,7 +294,7 @@ Versioning: every release bumps `version` in `.claude-plugin/plugin.json` **and*
 
 ## Status
 
-v0.3.1 ([CHANGELOG](./CHANGELOG.md)) — core logic is covered by 48 offline unit tests (yt-dlp,
+v0.3.2 ([CHANGELOG](./CHANGELOG.md)) — core logic is covered by 53 offline unit tests (yt-dlp,
 whisper backends, cache, and OpenCC are mocked; no network or models needed). The full flow has
 been manually verified (2026-07-19: real YouTube download, transcription, cached re-digest,
 Chinese conversion, `--keep-audio`, output-folder digests in md/html, transcript translation,

@@ -4,6 +4,25 @@ All notable changes to this project are documented here. **Every release bumps `
 `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` (kept identical) and adds an
 entry below.**
 
+## [0.3.2] - 2026-07-19
+
+### Added
+- **`--model` flag** — pick the whisper model per run (`--model small`). Precedence:
+  `--model` > `AUDIO_TLDR_MODEL` env > default. Bare names are mapped per backend (mlx gets
+  the `mlx-community/whisper-` prefix automatically; `whisper-`-prefixed names are
+  normalized; a full HF repo path is used as-is). whisper-cpp is unaffected (file-based model)
+- The cache `meta.json` (and the printed JSON line) now records which `model` produced the
+  transcript
+- **`model` preference** — set a standing whisper model in
+  `~/.config/audio-tldr/preferences.md` (`model: large-v3`); the agent passes it as `--model`.
+  An explicit per-request model always wins over the preference
+
+### Changed
+- **Default model is `large-v3-turbo` on every backend** — previously faster-whisper and
+  openai-whisper defaulted to `small`. On CPU-only machines this favors quality over speed;
+  pass `--model small` (or set `AUDIO_TLDR_MODEL=small`) to restore the old behavior
+- Test suite grown to 53 offline unit tests (model resolution ×5)
+
 ## [0.3.1] - 2026-07-19
 
 ### Fixed
