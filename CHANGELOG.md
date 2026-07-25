@@ -4,6 +4,22 @@ All notable changes to this project are documented here. **Every release bumps `
 `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` (kept identical) and adds an
 entry below.**
 
+## [0.4.0] - 2026-07-25
+
+### Added
+- **Built-in digest templates** — `meeting-minutes`, `key-summary` (the default digest,
+  structure moved from SKILL.md into the template), `analysis-report`; the conversational
+  digest prompt now lists the template menu
+- **User templates** — drop a markdown file in `~/.config/audio-tldr/templates/`: same name
+  overrides a built-in, a new name extends the menu; a format described in conversation can
+  be saved as a reusable template
+- **Digest via subagent** — on platforms with subagents the Phase 2 digest runs on a cheaper
+  model by default (Claude Code: `sonnet`; Codex: `GPT-5.6 Terra`); new `digest_model`
+  preference (a model name pins it, `off` = digest inline); falls back to inline digesting
+  when dispatch is unavailable
+- README (en + zh-TW): Digest templates section, `digest_model` row, update-safety note
+- 9 new offline template tests (63 total); `transcribe.py` unchanged
+
 ## [0.3.3] - 2026-07-19
 
 ### Changed

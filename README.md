@@ -315,7 +315,7 @@ Environment variables:
 ```bash
 git clone https://github.com/AugustusW/audio-tldr-skill.git
 cd audio-tldr-skill
-python3 -m pytest tests/   # 54 unit tests, no network or model needed
+python3 -m pytest tests/   # 63 unit tests, no network or model needed
 ```
 
 Versioning: every release bumps `version` in `.claude-plugin/plugin.json` **and**
@@ -329,7 +329,7 @@ Your preferences, custom templates (`~/.config/audio-tldr/`), and cache
 
 ## Status
 
-v0.3.3 ([CHANGELOG](./CHANGELOG.md)) — core logic is covered by 54 offline unit tests (yt-dlp,
+v0.4.0 ([CHANGELOG](./CHANGELOG.md)) — core logic is covered by 63 offline unit tests (yt-dlp,
 whisper backends, cache, and OpenCC are mocked; no network or models needed). The full flow has
 been manually verified (2026-07-19: real YouTube download, transcription, cached re-digest,
 Chinese conversion, `--keep-audio`, output-folder digests in md/html, transcript translation,
