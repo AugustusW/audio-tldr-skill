@@ -233,7 +233,7 @@ model: large-v3
 | `auto_delete_audio` | `on` | 轉錄完刪除下載音檔；`off` 則 mp3 留在快取資料夾 |
 | `output_format` | `md` | 摘要檔格式 `md` 或 `html`；當次對話指定優先於此欄 |
 | `model` | `large-v3-turbo` | 轉錄用的 whisper 模型（以 `--model` 傳入）；當次對話指定優先於此欄 |
-| `digest_model` | （平台預設） | 摘要 subagent 用的模型——未設＝平台預設（Claude Code：`sonnet`；Codex：`GPT-5.6 Terra`）；填模型名＝指定；`off`＝不派 subagent、當前 agent 直接摘要 |
+| `digest_model` | （平台預設） | 摘要 subagent 用的模型——未設＝平台預設（Claude Code：`sonnet`；Codex：`GPT-5.6 Terra`）；填模型名＝指定；`off`＝不派 subagent、當前 agent 直接摘要（通常較耗額度） |
 
 此檔由 agent 讀取（Claude Code 與 Codex 共用）——安裝時不會要求設定，檔案不存在時一律走預設。
 

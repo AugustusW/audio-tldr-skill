@@ -148,8 +148,9 @@ first. Afterwards, offer once: "Want me to save this as a reusable template?" If
 write it to `~/.config/audio-tldr/templates/<slug>.md` in the same format as the
 built-ins (frontmatter `name` + `description`, then section instructions), using a
 slug the user picks (or suggest one). Sanitize the slug with the same allowlist as
-digest filenames (letters, digits, spaces, `-`, `_` only; lowercase; spaces to `-`).
-From then on it appears in the template menu like any other template.
+digest filenames (letters, digits, spaces, `-`, `_` only; lowercase; spaces to `-`) —
+sanitization is silent and automatic; if nothing survives it, tell the user and ask for
+another name. From then on it appears in the template menu like any other template.
 
 ## Digest via subagent (cheaper model)
 

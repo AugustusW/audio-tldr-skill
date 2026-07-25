@@ -255,7 +255,7 @@ model: large-v3
 | `auto_delete_audio` | `on` | delete downloaded audio after transcription; `off` keeps the mp3 in the cache entry |
 | `output_format` | `md` | digest file format, `md` or `html`; a per-request choice always wins |
 | `model` | `large-v3-turbo` | whisper model for transcription (passed as `--model`); a per-request choice always wins |
-| `digest_model` | (platform default) | model for the digest subagent — unset = platform default (Claude Code: `sonnet`; Codex: `GPT-5.6 Terra`); a model name pins it; `off` = digest inline, no subagent |
+| `digest_model` | (platform default) | model for the digest subagent — unset = platform default (Claude Code: `sonnet`; Codex: `GPT-5.6 Terra`); a model name pins it; `off` = digest inline on the current agent (typically pricier) |
 
 The file is read by the agent (Claude Code and Codex share it) — the install never asks you to
 set it up, and defaults apply whenever it's absent.
