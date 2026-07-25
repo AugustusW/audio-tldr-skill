@@ -43,7 +43,8 @@
 - ✓ 內建快取管理：列表、單清、全清、選配保留期限
 - ✓ 超過 20 分鐘的內容附時間軸
 - ✓ 摘要成品存入 output 資料夾，可選 Markdown 或 HTML——逐字稿留在快取
-- ✓ 對話式詢問：請求沒說要怎麼整理時，agent 用純文字詢問（重點整理／會議記錄／詳細摘要／行動項目／Q&A／翻譯／自由描述）
+- ✓ 對話式詢問：請求沒說要怎麼整理時，agent 用純文字列出樣板選單詢問
+- ✓ 整理樣板：會議記錄／重點摘要／分析報告——也可把自己的格式存成樣板重用
 - ✓ 摘要層翻譯：任何語言輸出摘要，或忠實全文翻譯
 - ✓ 選配習慣設定檔——不設也能用，零門檻
 - ✓ interpreter 自動選擇：backend 裝在別的 Python（如 homebrew）會自動找到並切換；`--doctor` 一鍵診斷環境
@@ -232,8 +233,31 @@ model: large-v3
 | `auto_delete_audio` | `on` | 轉錄完刪除下載音檔；`off` 則 mp3 留在快取資料夾 |
 | `output_format` | `md` | 摘要檔格式 `md` 或 `html`；當次對話指定優先於此欄 |
 | `model` | `large-v3-turbo` | 轉錄用的 whisper 模型（以 `--model` 傳入）；當次對話指定優先於此欄 |
+| `digest_model` | （平台預設） | 摘要 subagent 用的模型——未設＝平台預設（Claude Code：`sonnet`；Codex：`GPT-5.6 Terra`）；填模型名＝指定；`off`＝不派 subagent、當前 agent 直接摘要 |
 
 此檔由 agent 讀取（Claude Code 與 Codex 共用）——安裝時不會要求設定，檔案不存在時一律走預設。
+
+## 整理樣板
+
+三個內建樣板決定摘要輸出結構——直接指名（「用會議記錄整理」）或在詢問時從選單挑：
+
+| 樣板 | 產出內容 |
+|---|---|
+| `meeting-minutes` | 基本資訊、討論主題、決議、行動項目、未決事項 |
+| `key-summary` | 重點整理、一段式摘要、選配時間軸（預設樣板） |
+| `analysis-report` | 論點與依據、數據事實、多方觀點、結論意涵 |
+
+`key-summary` 的時間軸只在三條件都成立時出現：`timeline` 偏好非 `off`、內容超過
+20 分鐘、逐字稿有明顯主題轉場。
+
+**自建樣板：**在 `~/.config/audio-tldr/templates/` 放一個 markdown 檔——frontmatter
+（`name`、`description`）加逐節指示；同名覆蓋內建樣板，新名字成為新選項。最快的起手式：
+從 `skills/audio-tldr/templates/` 複製一個內建樣板來改（例如改時間軸門檻）。也可以在
+對話中直接描述想要的格式——skill 會主動問要不要存起來重用。自建樣板放在 skill 資料夾
+外面，更新 skill 不會動到它們。
+
+**省額度摘要：**支援 subagent 的平台上，摘要預設交給較便宜的模型（Claude Code：`sonnet`；
+Codex：`GPT-5.6 Terra`）——用 `digest_model` 偏好指定模型或關閉（`off`＝當前 agent 直接摘要）。
 
 ## 快取與設定
 
@@ -273,7 +297,8 @@ python3 -m pytest tests/   # 54 個單元測試，不需網路或模型
 [GitHub Release](https://github.com/AugustusW/audio-tldr-skill/releases)。
 **想收到更新通知**：Watch 本 repo（Custom → Releases）；用 Claude Code plugin 安裝的話，
 跑 `/plugin` 從 marketplace 更新（它比對上述 version）。手動複製安裝沒有自動更新——
-新版釋出後重新複製 skill 資料夾即可。
+新版釋出後重新複製 skill 資料夾即可。你的習慣設定與自建樣板（`~/.config/audio-tldr/`）、
+快取（`~/.cache/audio-tldr/`）都在 skill 資料夾外——更新永遠不會動到它們。
 
 ## 狀態
 

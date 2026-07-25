@@ -45,7 +45,8 @@ re-upload, re-transcribe, re-pay      transcribe once, reuse from cache
 - ✓ Cache management built in: list, clear one, clear all, opt-in retention
 - ✓ Timeline for long content (> 20 min)
 - ✓ Digests saved to an output folder as Markdown or HTML — transcripts stay in the cache
-- ✓ Conversational digest prompt: no request stated? The agent asks in plain text (key takeaways / meeting minutes / detailed summary / action items / Q&A / translation / your own words)
+- ✓ Conversational digest prompt: no request stated? The agent asks in plain text, listing the template menu
+- ✓ Digest templates: meeting minutes, key summary, analysis report — or save your own reusable format
 - ✓ Translation at the digest layer: digests in any language, or a faithful full-transcript translation
 - ✓ Optional preferences file for standing habits — zero setup required
 - ✓ Interpreter auto-selection: backend installed in another Python (e.g. Homebrew) is found and used automatically; `--doctor` diagnoses the environment
@@ -254,9 +255,35 @@ model: large-v3
 | `auto_delete_audio` | `on` | delete downloaded audio after transcription; `off` keeps the mp3 in the cache entry |
 | `output_format` | `md` | digest file format, `md` or `html`; a per-request choice always wins |
 | `model` | `large-v3-turbo` | whisper model for transcription (passed as `--model`); a per-request choice always wins |
+| `digest_model` | (platform default) | model for the digest subagent — unset = platform default (Claude Code: `sonnet`; Codex: `GPT-5.6 Terra`); a model name pins it; `off` = digest inline, no subagent |
 
 The file is read by the agent (Claude Code and Codex share it) — the install never asks you to
 set it up, and defaults apply whenever it's absent.
+
+## Digest templates
+
+Three built-in templates shape the digest output — name one ("digest this as
+meeting minutes") or pick from the menu when asked:
+
+| Template | What you get |
+|---|---|
+| `meeting-minutes` | Meta, topics discussed, decisions, action items, open questions |
+| `key-summary` | Key takeaways, one-paragraph summary, optional timeline (the default) |
+| `analysis-report` | Arguments with evidence, data points, perspectives, implications |
+
+The timeline in `key-summary` appears only when the `timeline` preference is not
+`off`, the source runs over 20 minutes, and the transcript has clear topic shifts.
+
+**Build your own:** drop a markdown file in `~/.config/audio-tldr/templates/` —
+frontmatter (`name`, `description`) plus section instructions; same name overrides a
+built-in, a new name becomes a new menu option. Easiest start: copy a built-in from
+`skills/audio-tldr/templates/` and edit (e.g. change the timeline threshold). You can
+also just describe a format in conversation — the skill offers to save it for reuse.
+Your templates live outside the skill folder, so skill updates never touch them.
+
+**Cheaper digests:** on platforms with subagents the digest runs on a cheaper model
+by default (Claude Code: `sonnet`; Codex: `GPT-5.6 Terra`) — see the `digest_model`
+preference to pin a model or turn this off (`off` = digest inline).
 
 ## Cache & configuration
 
@@ -297,6 +324,8 @@ and is published as a git tag + [GitHub Release](https://github.com/AugustusW/au
 **To get update notifications**: Watch this repo (Custom → Releases), or — if you installed as a
 Claude Code plugin — run `/plugin` and update from the marketplace (it compares the version above).
 Manual-copy installs have no auto-update: re-copy the skill folder after a new release.
+Your preferences, custom templates (`~/.config/audio-tldr/`), and cache
+(`~/.cache/audio-tldr/`) all live outside the skill folder — updating never touches them.
 
 ## Status
 
