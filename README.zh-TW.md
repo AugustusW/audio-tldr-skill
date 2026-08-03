@@ -11,6 +11,8 @@
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-skill%20%2B%20plugin-orange.svg)](https://claude.com/claude-code)
 [![Codex](https://img.shields.io/badge/Codex-compatible-black.svg)](https://developers.openai.com/codex/skills)
 
+![示範：從快取轉錄稿摘要 YouTube 影片](./assets/demo.gif)
+
 一個 agent skill——採開放 [SKILL.md 標準](https://developers.openai.com/codex/skills)，
 [Claude Code](https://claude.com/claude-code) 與 [Codex](https://developers.openai.com/codex/skills) **皆可用**——
 把長影音內容濃縮成 **3–7 條重點 + 一段摘要**。
