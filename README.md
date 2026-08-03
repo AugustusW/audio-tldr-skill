@@ -11,6 +11,8 @@ English | [繁體中文](./README.zh-TW.md)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-skill%20%2B%20plugin-orange.svg)](https://claude.com/claude-code)
 [![Codex](https://img.shields.io/badge/Codex-compatible-black.svg)](https://developers.openai.com/codex/skills)
 
+![Demo: summarize a YouTube video from a cached transcript](./assets/demo.gif)
+
 An agent skill — open [SKILL.md standard](https://developers.openai.com/codex/skills), works in
 [Claude Code](https://claude.com/claude-code) **and** [Codex](https://developers.openai.com/codex/skills) —
 that turns long-form media into **3–7 key
