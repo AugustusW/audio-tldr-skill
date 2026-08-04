@@ -44,3 +44,56 @@ def parse_at_list(s: str) -> list:
 def frame_filename(i: int, ts: float) -> str:
     m, s = int(ts) // 60, int(ts) % 60
     return f"{i:03d}-{m:04d}m{s:02d}s.jpg"
+
+
+_PTS_RE = re.compile(r"pts_time:(\d+(?:\.\d+)?)")
+
+
+def parse_showinfo_times(stderr: str) -> list:
+    return [float(m) for m in _PTS_RE.findall(stderr)]
+
+
+def apply_min_gap(times: list, min_gap: float) -> list:
+    out = []
+    for t in times:
+        if not out or t - out[-1] >= min_gap:
+            out.append(t)
+    return out
+
+
+def downsample_evenly(times: list, max_n: int) -> list:
+    if len(times) <= max_n:
+        return list(times)
+    if max_n == 1:
+        return [times[0]]
+    step = (len(times) - 1) / (max_n - 1)
+    idx = sorted({round(i * step) for i in range(max_n)})
+    return [times[i] for i in idx]
+
+
+def validate_threshold(f) -> float:
+    f = float(f)
+    if not 0.02 <= f <= 0.9:
+        raise ValueError(f"--threshold must be between 0.02 and 0.9, got {f}")
+    return f
+
+
+def build_detect_cmd(video, threshold: float) -> list:
+    return ["ffmpeg", "-hide_banner", "-i", str(video),
+            "-vf", f"select='gt(scene,{threshold})',showinfo",
+            "-f", "null", "-"]
+
+
+def build_extract_cmd(video, ts: float, out_path, quality: int) -> list:
+    return ["ffmpeg", "-hide_banner", "-y", "-ss", f"{ts:.3f}", "-i", str(video),
+            "-frames:v", "1", "-q:v", str(quality), str(out_path)]
+
+
+def build_ytdlp_cmd(url: str, entry: Path) -> list:
+    return ["yt-dlp", "-f", "bv*[height<=720]+ba/b[height<=720]/b",
+            "--no-playlist", "-o", str(entry / "video.%(ext)s"), url]
+
+
+def build_ffprobe_cmd(video) -> list:
+    return ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+            "-of", "csv=p=0", str(video)]
