@@ -51,6 +51,7 @@
 - ✓ 選配習慣設定檔——不設也能用，零門檻
 - ✓ interpreter 自動選擇：backend 裝在別的 Python（如 homebrew）會自動找到並切換；`--doctor` 一鍵診斷環境
 - ✓ 內建 Apple Podcasts fallback：yt-dlp extractor 失敗時自動走 iTunes lookup API——快取識別維持你貼的原始連結；貼節目頁連結（無單集 id）自動抓最新一集
+- ✓ 影片來源可選抽幀：scene detection 投影片截圖、或指定時間戳畫面——影片以 ≤720p 抓取、抽完即刪；幀圖與逐字稿共用同一快取 entry
 - ✓ 手動 copy、Claude Code plugin、或裝進 Codex（開放 SKILL.md 標準）三種安裝方式
 
 ## 安裝
@@ -176,6 +177,20 @@ Copy-Item -Recurse -Force "audio-tldr-skill\skills\audio-tldr" $skillsDir
 
 在請求裡直接說明需求——聚焦主題、受眾、輸出格式、長度、語言——摘要就會照你的需求走，
 而不是預設的重點+摘要結構。最後一個直接吃快取——秒回，不重轉錄。
+
+### 截圖（選配）
+
+```
+> 摘要這場演講，順便抓投影片：https://youtu.be/xxxx
+> ~/Videos/keynote.mp4 的 1:30 跟 12:05 各截一張
+```
+
+請求提到截圖／投影片時會跑 `scripts/frames.py`：ffmpeg scene detection 抓畫面明顯變化
+的幀（`--threshold`、`--min-gap`、`--max-frames`），或用 `--at 90,12:05` 指定時間戳抽幀
+（例如幫摘要的時間軸配圖）。預設不啟用——單純摘要請求永遠不會下載影片。網址來源以
+≤720p 抓影片、抽完幀立即刪除（`--keep-video` 保留）；本機檔案原地使用、永不修改。幀圖
+與 `manifest.json` 跟逐字稿共用同一快取 entry，重複請求秒回。純邏輯有自動化測試；真實
+影片抽幀每版人工驗證。
 
 ## 運作原理
 

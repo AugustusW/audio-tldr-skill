@@ -53,6 +53,7 @@ re-upload, re-transcribe, re-pay      transcribe once, reuse from cache
 - ✓ Optional preferences file for standing habits — zero setup required
 - ✓ Interpreter auto-selection: backend installed in another Python (e.g. Homebrew) is found and used automatically; `--doctor` diagnoses the environment
 - ✓ Apple Podcasts fallback built in: when yt-dlp's extractor fails, episodes resolve via the iTunes lookup API — cache identity stays on your original link; a show link (no episode id) automatically uses the latest episode
+- ✓ Opt-in frame extraction for video sources: scene-detection slide capture, or stills at exact timestamps — video fetched at ≤720p and deleted after extraction; frames share the transcript's cache entry
 - ✓ Install by copy, as a Claude Code plugin, **or** into Codex (open SKILL.md standard)
 
 ## Install
@@ -190,6 +191,22 @@ prefer the plugin install if you want managed versions.
 State your needs in the request — focus, audience, format, length, language — and the digest
 follows them instead of the default takeaways+summary structure. The last one re-uses the
 cached transcript — instant, no re-transcription.
+
+### Frames (optional)
+
+```
+> summarize this talk and grab the slides: https://youtu.be/xxxx
+> screenshots at 1:30 and 12:05 from ~/Videos/keynote.mp4
+```
+
+Asking for screenshots / slides runs `scripts/frames.py`: ffmpeg scene detection captures
+frames where the picture visibly changes (`--threshold`, `--min-gap`, `--max-frames`), or
+`--at 90,12:05` extracts stills at exact timestamps (e.g. to illustrate a digest timeline).
+Off by default — plain summarize requests never download video. For URLs the video is
+fetched at ≤720p and deleted right after extraction (`--keep-video` keeps it); local files
+are used in place and never modified. Frames and their `manifest.json` live in the same
+cache entry as the transcript, so repeated requests are instant. Pure logic is covered by
+automated tests; real-video extraction is verified manually per release.
 
 ## How it works
 

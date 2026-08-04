@@ -4,6 +4,25 @@ All notable changes to this project are documented here. **Every release bumps `
 `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` (kept identical) and adds an
 entry below.**
 
+## [0.5.0] - 2026-08-04
+
+### Added
+
+- **`scripts/frames.py`** — opt-in frame extraction for video sources, two modes:
+  scene-detection slide capture (`--threshold` / `--min-gap` / `--max-frames` /
+  `--quality`) and exact-timestamp stills (`--at 90,12:05`, partial cache hits only
+  extract the missing timestamps). Frames + `manifest.json` share the transcript's
+  cache entry (same source → same entry); `--force` re-extracts.
+- Video lifecycle: URLs are fetched at ≤720p and the video file is deleted right after
+  extraction (`--keep-video` keeps it); local files are used in place, never modified.
+- `SKILL.md` Phase 1.5 — trigger rules (off by default), digest embedding rules
+  (md relative paths / html base64 data URIs), optional vision de-duplication pass,
+  untrusted-content rule extended to frame imagery.
+- Frames-only cache entries write a minimal `meta.json` so `--cache-info` / `--clear` /
+  retention pruning can see them (transcribe.py only lists entries with `meta.json`).
+- `tests/test_frames.py` — pure-function and stub-runner coverage (no real
+  ffmpeg/yt-dlp in tests).
+
 ## [0.4.0] - 2026-07-25
 
 ### Added
