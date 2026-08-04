@@ -97,3 +97,31 @@ def build_ytdlp_cmd(url: str, entry: Path) -> list:
 def build_ffprobe_cmd(video) -> list:
     return ["ffprobe", "-v", "error", "-show_entries", "format=duration",
             "-of", "csv=p=0", str(video)]
+
+
+def scene_cache_ok(manifest: dict, threshold: float, min_gap: float) -> bool:
+    return (manifest.get("mode") == "scene"
+            and manifest.get("threshold") == threshold
+            and manifest.get("min_gap") == min_gap)
+
+
+def missing_at_times(manifest: dict, requested: list, tol: float = 0.5) -> list:
+    have = [f["ts"] for f in manifest.get("frames", [])]
+    return [t for t in requested if not any(abs(t - h) <= tol for h in have)]
+
+
+def build_manifest(mode, threshold, min_gap, source, frame_entries, duration=None) -> dict:
+    return {"mode": mode, "threshold": threshold, "min_gap": min_gap,
+            "source": source, "created": datetime.now().isoformat(timespec="seconds"),
+            "duration": duration, "frames": frame_entries}
+
+
+def write_min_meta(entry: Path, source: str, title: str) -> None:
+    meta_path = entry / "meta.json"
+    if meta_path.exists():
+        return
+    entry.mkdir(parents=True, exist_ok=True)
+    meta_path.write_text(json.dumps({
+        "source": source, "title": title, "frames_only": True,
+        "created": datetime.now().isoformat(timespec="seconds"),
+    }, ensure_ascii=False))

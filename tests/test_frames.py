@@ -87,3 +87,49 @@ def test_build_ytdlp_cmd_caps_720p():
 def test_build_ffprobe_cmd():
     cmd = frames.build_ffprobe_cmd("/tmp/v.mp4")
     assert cmd[0] == "ffprobe" and "/tmp/v.mp4" in cmd
+
+
+def _mani(mode="scene", threshold=0.1, min_gap=2.0, ts_list=(32.4, 65.0)):
+    return {"mode": mode, "threshold": threshold, "min_gap": min_gap,
+            "frames": [{"i": i + 1, "ts": t, "file": frames.frame_filename(i + 1, t)}
+                       for i, t in enumerate(ts_list)]}
+
+
+def test_scene_cache_ok_same_params():
+    assert frames.scene_cache_ok(_mani(), 0.1, 2.0)
+
+
+def test_scene_cache_miss_on_param_change():
+    assert not frames.scene_cache_ok(_mani(), 0.2, 2.0)
+    assert not frames.scene_cache_ok(_mani(mode="at"), 0.1, 2.0)
+
+
+def test_missing_at_times_tolerance():
+    m = _mani(mode="at")
+    assert frames.missing_at_times(m, [32.0, 65.4, 100.0]) == [100.0]
+
+
+def test_build_manifest_shape():
+    m = frames.build_manifest("scene", 0.1, 2.0, "https://x",
+                              [{"i": 1, "ts": 5.0, "file": "001-0000m05s.jpg"}],
+                              duration=600.5)
+    assert m["mode"] == "scene" and m["frames"][0]["file"] == "001-0000m05s.jpg"
+    assert "created" in m and m["source"] == "https://x" and m["duration"] == 600.5
+
+
+def test_write_min_meta_creates_and_never_overwrites(tmp_path):
+    frames.write_min_meta(tmp_path, "https://x", "My Talk")
+    meta = json.loads((tmp_path / "meta.json").read_text())
+    assert meta["frames_only"] is True and meta["title"] == "My Talk"
+    (tmp_path / "meta.json").write_text('{"title": "full"}')
+    frames.write_min_meta(tmp_path, "https://x", "My Talk")
+    assert json.loads((tmp_path / "meta.json").read_text())["title"] == "full"
+
+
+def test_cache_key_shared_with_transcribe():
+    t_spec = importlib.util.spec_from_file_location(
+        "transcribe", SCRIPT.parent / "transcribe.py")
+    transcribe = importlib.util.module_from_spec(t_spec)
+    t_spec.loader.exec_module(transcribe)
+    url = "https://youtu.be/abc?si=track"
+    assert frames.cache_key(url) == transcribe.cache_key(url)
