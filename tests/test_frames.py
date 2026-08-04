@@ -133,3 +133,61 @@ def test_cache_key_shared_with_transcribe():
     t_spec.loader.exec_module(transcribe)
     url = "https://youtu.be/abc?si=track"
     assert frames.cache_key(url) == transcribe.cache_key(url)
+
+
+class StubRunner:
+    """Simulates subprocess.run for ffmpeg/ffprobe/yt-dlp."""
+    def __init__(self, scene_times=(32.4, 65.0), tmp=None):
+        self.calls, self.scene_times, self.tmp = [], scene_times, tmp
+
+    def __call__(self, cmd, **kw):
+        self.calls.append(cmd)
+        out, err, rc = "", "", 0
+        if cmd[0] == "yt-dlp":
+            (Path(self.tmp) / "video.mp4").write_bytes(b"fake")
+        elif cmd[0] == "ffmpeg" and "null" in cmd:
+            err = "\n".join(f"pts_time:{t}" for t in self.scene_times)
+        elif cmd[0] == "ffmpeg":
+            Path(cmd[-1]).write_bytes(b"jpg")
+        elif cmd[0] == "ffprobe":
+            out = "600.5\n"
+        return subprocess.CompletedProcess(cmd, rc, stdout=out, stderr=err)
+
+
+def _run_main(argv, monkeypatch, tmp_path, capsys, scene_times=(32.4, 65.0)):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    src = tmp_path / "talk.mp4"
+    if not src.exists():
+        src.write_bytes(b"local-video-bytes")
+    entry = frames.cache_dir() / frames.cache_key(str(src))
+    entry.mkdir(parents=True, exist_ok=True)
+    runner = StubRunner(scene_times=scene_times, tmp=entry)
+    rc = frames.main([str(src)] + argv, run=runner)
+    out = json.loads(capsys.readouterr().out.strip())
+    return rc, out, runner
+
+
+def test_main_scene_mode_extracts_and_caches(monkeypatch, tmp_path, capsys):
+    rc, out, runner = _run_main([], monkeypatch, tmp_path, capsys)
+    assert rc == 0 and out["frame_count"] == 2 and out["cache_hit"] is False
+    assert out["mode"] == "scene" and out["duration"] == 600.5
+    rc2, out2, runner2 = _run_main([], monkeypatch, tmp_path, capsys)
+    assert out2["cache_hit"] is True and runner2.calls == []
+    assert out2["duration"] == 600.5
+
+
+def test_main_at_mode(monkeypatch, tmp_path, capsys):
+    rc, out, _ = _run_main(["--at", "10,20"], monkeypatch, tmp_path, capsys)
+    assert rc == 0 and out["mode"] == "at" and out["frame_count"] == 2
+
+
+def test_main_local_file_never_deleted(monkeypatch, tmp_path, capsys):
+    _run_main([], monkeypatch, tmp_path, capsys)
+    assert (tmp_path / "talk.mp4").exists()
+
+
+def test_main_bad_threshold_exits_2(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    src = tmp_path / "talk.mp4"
+    src.write_bytes(b"x")
+    assert frames.main([str(src), "--threshold", "5"], run=StubRunner()) == 2
