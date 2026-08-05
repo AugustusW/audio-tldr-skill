@@ -192,6 +192,10 @@ State your needs in the request — focus, audience, format, length, language �
 follows them instead of the default takeaways+summary structure. The last one re-uses the
 cached transcript — instant, no re-transcription.
 
+> **Pairs well with [sharedoc-mcp](https://github.com/AugustusW/sharedoc-mcp)** — once the digest
+> is written, "share this as a doc" turns it into a link you can hand to anyone
+> (append, extend, or revoke it later).
+
 ### Frames (optional)
 
 ```
