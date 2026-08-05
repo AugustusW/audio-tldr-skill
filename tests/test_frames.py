@@ -186,6 +186,45 @@ def test_main_local_file_never_deleted(monkeypatch, tmp_path, capsys):
     assert (tmp_path / "talk.mp4").exists()
 
 
+def test_at_after_scene_returns_only_requested_frames(monkeypatch, tmp_path, capsys):
+    _run_main([], monkeypatch, tmp_path, capsys)                    # scene: 32.4, 65.0
+    rc, out, _ = _run_main(["--at", "10"], monkeypatch, tmp_path, capsys)
+    assert rc == 0 and out["mode"] == "at"
+    assert [f["ts"] for f in out["frames"]] == [10.0]               # 不混入 scene 幀
+
+
+def test_at_near_scene_frame_not_served_from_scene_cache(monkeypatch, tmp_path, capsys):
+    _run_main([], monkeypatch, tmp_path, capsys)                    # scene: 32.4, 65.0
+    rc, out, _ = _run_main(["--at", "32"], monkeypatch, tmp_path, capsys)
+    assert out["mode"] == "at" and out["cache_hit"] is False        # 32≈32.4 也不能拿 scene 快取充數
+    assert [f["ts"] for f in out["frames"]] == [32.0]
+
+
+def test_scene_after_at_leaves_no_orphan_jpgs(monkeypatch, tmp_path, capsys):
+    _run_main(["--at", "10,20"], monkeypatch, tmp_path, capsys)
+    rc, out, _ = _run_main([], monkeypatch, tmp_path, capsys)       # scene: 32.4, 65.0
+    fdir = Path(out["frames_dir"])
+    on_disk = sorted(p.name for p in fdir.glob("*.jpg"))
+    assert on_disk == sorted(f["file"] for f in out["frames"])      # 舊 at 幀不殘留
+
+
+def test_at_incremental_append_still_works(monkeypatch, tmp_path, capsys):
+    _run_main(["--at", "10,20"], monkeypatch, tmp_path, capsys)
+    rc, out, runner = _run_main(["--at", "10,20,30"], monkeypatch, tmp_path, capsys)
+    assert out["frame_count"] == 3
+    extracts = [c for c in runner.calls if c[0] == "ffmpeg" and "null" not in c]
+    assert len(extracts) == 1                                       # 只補抓缺的 30s
+
+
+def test_force_rebuild_leaves_no_stale_jpgs(monkeypatch, tmp_path, capsys):
+    _run_main([], monkeypatch, tmp_path, capsys, scene_times=(32.4, 65.0))
+    rc, out, _ = _run_main(["--force"], monkeypatch, tmp_path, capsys,
+                           scene_times=(40.0,))
+    fdir = Path(out["frames_dir"])
+    on_disk = sorted(p.name for p in fdir.glob("*.jpg"))
+    assert on_disk == ["001-0000m40s.jpg"]                          # 舊 32s/65s 幀已清
+
+
 def test_main_bad_threshold_exits_2(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     src = tmp_path / "talk.mp4"

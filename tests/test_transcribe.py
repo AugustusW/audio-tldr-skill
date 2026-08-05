@@ -341,6 +341,22 @@ def test_no_reexec_when_guard_set(monkeypatch, tmp_path, capsys):
     assert rc == 3          # loop guard：不再切換，走 install guide
 
 
+def test_unguarded_main_never_reexecs_under_pytest(monkeypatch, tmp_path, capsys):
+    # 不自行設 AUDIO_TLDR_REEXECED 的 main() 測試（如 no-backend exit3 那類）：
+    # conftest 的 session-level env 必須擋住 execv，否則在多 Python + MLX 的機器上
+    # 整個 pytest process 會被換成真實轉錄（餵假 mp3 → SIGABRT / exit 134）
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setattr(transcribe, "detect_backend", lambda: None)
+    monkeypatch.setattr(transcribe, "_candidate_interpreters", lambda: ["/fake/py"])
+    monkeypatch.setattr(transcribe, "_module_backend_in", lambda p: True)
+    calls = []
+    monkeypatch.setattr(transcribe.os, "execv", lambda *a: calls.append(a))
+    src = tmp_path / "a.mp3"
+    src.write_bytes(b"x")
+    rc = transcribe.main([str(src)])
+    assert rc == 3 and calls == []
+
+
 def test_explicit_python_env_reexec(monkeypatch, tmp_path):
     monkeypatch.delenv("AUDIO_TLDR_REEXECED", raising=False)
     fake_py = tmp_path / "mypython"

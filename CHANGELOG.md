@@ -4,6 +4,33 @@ All notable changes to this project are documented here. **Every release bumps `
 `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` (kept identical) and adds an
 entry below.**
 
+## [0.5.1] - 2026-08-05
+
+### Fixed
+
+- **frames: scene/`--at` mode switching no longer mixes results.** An `--at` request
+  is never served from (or merged with) a cached scene-mode manifest: the cache-hit
+  check and the incremental-append path now both require a matching `mode`. Previously
+  a scene run followed by `--at` returned the scene frames alongside (or instead of)
+  the requested timestamps.
+- **frames: full rebuilds delete stale JPGs.** Switching modes or using `--force`
+  used to leave the previous run's frames on disk unreferenced by `manifest.json`;
+  a full rebuild now clears the frames directory first. `--at` partial cache hits
+  still only extract the missing timestamps.
+- **tests: `pytest` can no longer escape into a real transcription.** On multi-Python
+  machines with a whisper backend installed, `transcribe.py`'s interpreter auto-switch
+  (`os.execv`) could replace the pytest process and run a real model on a fake test
+  file (aborting with exit 134). `tests/conftest.py` now sets the re-exec guard for
+  the whole session; re-exec behavior itself stays covered by tests that opt out
+  explicitly.
+- **Plugin manifests were still `0.4.0` in the v0.5.0 release.** `plugin.json` and
+  `marketplace.json` now carry the release version again, per the versioning rule
+  above.
+
+### Changed
+
+- README test counts corrected (93 unit tests; the en/zh-TW pages had drifted).
+
 ## [0.5.0] - 2026-08-04
 
 ### Added

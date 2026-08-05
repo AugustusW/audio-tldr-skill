@@ -334,7 +334,7 @@ Environment variables:
 ```bash
 git clone https://github.com/AugustusW/audio-tldr-skill.git
 cd audio-tldr-skill
-python3 -m pytest tests/   # 63 unit tests, no network or model needed
+python3 -m pytest tests/   # 93 unit tests, no network or model needed
 ```
 
 Versioning: every release bumps `version` in `.claude-plugin/plugin.json` **and**

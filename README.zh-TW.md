@@ -306,7 +306,7 @@ Codex：`GPT-5.6 Terra`）——用 `digest_model` 偏好指定模型或關閉�
 ```bash
 git clone https://github.com/AugustusW/audio-tldr-skill.git
 cd audio-tldr-skill
-python3 -m pytest tests/   # 54 個單元測試，不需網路或模型
+python3 -m pytest tests/   # 93 個單元測試，不需網路或模型
 ```
 
 版本規則：每次釋出必同步 bump `.claude-plugin/plugin.json` 與 `.claude-plugin/marketplace.json`
