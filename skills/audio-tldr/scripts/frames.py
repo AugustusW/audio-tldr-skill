@@ -196,7 +196,8 @@ def main(argv=None, run=subprocess.run) -> int:
     if mani_path.exists() and not a.force:
         manifest = json.loads(mani_path.read_text())
         hit = (scene_cache_ok(manifest, threshold, a.min_gap) if mode == "scene"
-               else not missing_at_times(manifest, at_times))
+               else manifest.get("mode") == "at"
+               and not missing_at_times(manifest, at_times))
         if hit:
             return _emit(fdir, manifest, cache_hit=True,
                          video_kept=_find_video(entry) is not None)
@@ -242,11 +243,17 @@ def main(argv=None, run=subprocess.run) -> int:
                   "(e.g. 0.05)", file=sys.stderr)
         existing = []
     else:
-        existing = manifest["frames"] if manifest else []
-        times = missing_at_times(manifest, at_times) if manifest else at_times
+        prev = manifest if manifest and manifest.get("mode") == "at" else None
+        existing = prev["frames"] if prev else []
+        times = missing_at_times(prev, at_times) if prev else at_times
 
     # ---- extract ----
     fdir.mkdir(parents=True, exist_ok=True)
+    if not existing:
+        # full rebuild (scene, mode switch, or --force): frames from the old
+        # manifest are no longer referenced — drop them or they orphan
+        for stale in fdir.glob("*.jpg"):
+            stale.unlink()
     entries = list(existing)
     for ts in times:
         i = len(entries) + 1
