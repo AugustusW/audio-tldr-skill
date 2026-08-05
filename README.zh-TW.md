@@ -178,6 +178,9 @@ Copy-Item -Recurse -Force "audio-tldr-skill\skills\audio-tldr" $skillsDir
 在請求裡直接說明需求——聚焦主題、受眾、輸出格式、長度、語言——摘要就會照你的需求走，
 而不是預設的重點+摘要結構。最後一個直接吃快取——秒回，不重轉錄。
 
+> **搭配 [sharedoc-mcp](https://github.com/AugustusW/sharedoc-mcp) 更好用**——摘要寫完後說
+> 「把這個做成分享文件」，就變成一條可以交給任何人的連結（之後可追加、延長、撤銷）。
+
 ### 截圖（選配）
 
 ```
