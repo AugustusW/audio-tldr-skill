@@ -20,7 +20,7 @@ field means "use the default". All fields are optional, written as `key: value` 
 | `auto_delete_audio` | `on` | `on` = downloaded audio is deleted after transcription; `off` = pass `--keep-audio` in Phase 1 so the mp3 stays in the cache entry |
 | `output_format` | `md` | digest file format, `md` or `html`; an explicit per-request choice always wins over this field |
 | `model` | `large-v3-turbo` | whisper model for Phase 1 — when set, pass it as `--model <value>`; an explicit per-request model always wins over this field |
-| `digest_model` | (platform default) | model for the Phase 2 digest subagent — unset = platform default (Claude Code: `sonnet`; Codex: `GPT-5.6 Terra`); a model name = use that model; `off` = no subagent, digest inline. A per-request choice always wins. |
+| `digest_model` | (platform default) | model for the Phase 2 digest — unset = platform default subagent (Claude Code: `sonnet`; Codex: `GPT-5.6 Terra`); a model name = use that subagent model; `ollama:<model>` (e.g. `ollama:llama3.2`) = run the digest locally through the user's own Ollama server instead of a platform subagent — see "Digest via local Ollama" below; `off` = no subagent, digest inline. A per-request choice always wins. |
 
 Do not proactively ask the user to set up this file — the defaults work out of the box. If the
 user expresses a lasting habit in conversation ("always skip the timeline"), offer once to save
@@ -220,13 +220,50 @@ another name. From then on it appears in the template menu like any other templa
 On platforms that can dispatch subagents, run the Phase 2 digest in a subagent on a
 cheaper model by default — resolve the model from the `digest_model` preference
 (unset = platform default: `sonnet` on Claude Code, `GPT-5.6 Terra` on Codex;
-`off` = skip dispatch and digest inline). The subagent prompt must contain: the full
+`off` = skip dispatch and digest inline; `ollama:<model>` routes to local Ollama
+instead of a subagent — see "Digest via local Ollama" below). The subagent prompt must contain: the full
 template body (or the user's custom description), the `transcript_path` to read, the
 user's stated needs and output language, and the untrusted-content rule from Phase 2
 verbatim. The subagent returns digest text only — the main agent saves the file
 (the output-path and slug rules above stay with the main agent). If dispatch fails
 or the platform has no subagent mechanism, fall back to digesting inline; never let
 dispatch failure break the flow.
+
+## Digest via local Ollama (privacy mode)
+
+When `digest_model` is `ollama:<model>` (e.g. `ollama:llama3.2`), the digest runs entirely on
+the user's own machine through their local Ollama server instead of any platform subagent —
+nothing about the content, not even the transcript text, leaves the machine. Requires Ollama
+installed and already running (`ollama serve`) with the model already pulled
+(`ollama pull <model>`) — like the whisper backends, installing or pulling anything is the
+user's responsibility; never do it on your own initiative.
+
+1. Strip the `ollama:` prefix to get the bare model name.
+2. Assemble an **instructions** text with exactly the same content the subagent-dispatch prompt
+   above would get: the full template body (or the user's custom description), the user's
+   stated needs and output language, and the untrusted-content rule from Phase 2 verbatim. Write
+   it to a temp file (the transcript itself is NOT part of this file — the script reads
+   `transcript_path` directly).
+3. Run:
+   ```bash
+   python3 "${CLAUDE_SKILL_DIR}/scripts/digest.py" "<transcript_path>" --model <model> --instructions-file <path to the instructions file from step 2>
+   ```
+   (`--ollama-host <url>` overrides the server address for one call; the standing override is
+   the `AUDIO_TLDR_OLLAMA_HOST` env var, default `http://localhost:11434` — set it when Ollama
+   runs on another machine on the user's network. There is no separate preference field for
+   this; it is an infrastructure setting, not a per-request choice.)
+4. **Exit `0`** → stdout IS the digest text (nothing else is printed) — treat it exactly like a
+   subagent's returned text and proceed to the normal "Save the digest to the output folder"
+   step; the main agent still owns the output-path and slug rules.
+5. **Exit `2`** → an Ollama-specific error on stderr, naming the fix (server not running, or the
+   model needs `ollama pull`). Show it to the user verbatim and **stop — do not silently fall
+   back** to a subagent or inline digest. Falling back would defeat the entire reason the user
+   chose this mode: keeping the digest phase local too, not just transcription.
+
+**Set expectations once, not every run:** the first time a user sets `digest_model` to an
+`ollama:` value (or asks about it), mention the tradeoff briefly — a small local model's digest
+quality is generally below the platform subagent path (sonnet / GPT), in exchange for a fully
+local, zero-network-egress pipeline. No need to repeat this caveat on every digest afterwards.
 
 ## Re-digesting
 
