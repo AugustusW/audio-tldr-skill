@@ -13,6 +13,7 @@ import tempfile
 import time
 import urllib.request
 from datetime import datetime
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
 
@@ -517,6 +518,58 @@ def _maybe_to_traditional(text, language):
     return conv.convert(text) if conv and text else text
 
 
+# ── Subtitle export (SRT/VTT, v0.6.0) ───────────────────────────────
+# Segment-level timestamps come from the backend (see _run_backend); formatting
+# to SRT/VTT text is backend-agnostic and lives here so it is testable in
+# isolation. Deliberately NOT run through _collapse_repetitions: that regex
+# collapses repeated phrases across the flat transcript, which has no clean
+# mapping back onto discrete, already-timestamped segments. Segment text does
+# still get the same OpenCC pass as the plain-text transcript (see main()).
+
+def _split_timestamp(seconds):
+    """seconds -> (hours, minutes, secs, ms), rounded half-up to the millisecond.
+    Uses Decimal on the string form of `seconds` instead of float math: binary
+    floats can't represent most decimals exactly, so e.g. round(1234.5) can
+    land either side of .5 depending on representation error. Decimal(str(x))
+    recovers the value's shortest decimal repr (what Python's own float repr
+    already computes) and rounds it deterministically."""
+    if seconds < 0:
+        seconds = 0
+    total_ms = int((Decimal(str(seconds)) * 1000).to_integral_value(rounding=ROUND_HALF_UP))
+    hours, rem = divmod(total_ms, 3_600_000)
+    minutes, rem = divmod(rem, 60_000)
+    secs, ms = divmod(rem, 1000)
+    return hours, minutes, secs, ms
+
+
+def _format_timestamp(seconds, sep=","):
+    """sep="," -> SRT (HH:MM:SS,mmm); sep="." -> WebVTT (HH:MM:SS.mmm)."""
+    h, m, s, ms = _split_timestamp(seconds)
+    return f"{h:02d}:{m:02d}:{s:02d}{sep}{ms:03d}"
+
+
+def _subtitle_blocks(segments):
+    """Shared iteration: drop segments whose text is blank after stripping —
+    an empty-text cue is not meaningful to a subtitle reader."""
+    for seg in segments:
+        text = (seg.get("text") or "").strip()
+        if text:
+            yield seg["start"], seg["end"], text
+
+
+def format_srt(segments) -> str:
+    blocks = [f"{i}\n{_format_timestamp(start, ',')} --> {_format_timestamp(end, ',')}\n{text}"
+              for i, (start, end, text) in enumerate(_subtitle_blocks(segments), start=1)]
+    return "\n\n".join(blocks) + ("\n" if blocks else "")
+
+
+def format_vtt(segments) -> str:
+    blocks = ["WEBVTT"] + [
+        f"{_format_timestamp(start, '.')} --> {_format_timestamp(end, '.')}\n{text}"
+        for start, end, text in _subtitle_blocks(segments)]
+    return "\n\n".join(blocks) + "\n"
+
+
 DEFAULT_MODEL = "large-v3-turbo"
 
 
@@ -544,7 +597,53 @@ INSTALL_GUIDE = """No whisper backend found. Install ONE of:
 Also required: yt-dlp + ffmpeg for URL sources."""
 
 
-def _run_backend(backend, audio_path, language, model_name=None):
+# ── Segment extraction for CLI backends (v0.6.0) ────────────────────
+# mlx-whisper and faster-whisper are Python APIs that already return segments
+# in-process. whisper-cpp and openai-whisper are invoked as subprocesses, so
+# their segments come from an extra machine-readable output file requested
+# only when a caller actually wants timestamps (--output-json / --output_format
+# json cost real CLI work, so the plain --format txt path never asks for them).
+
+def _parse_whisper_cpp_json(json_path: Path):
+    """whisper-cli --output-json writes {"transcription": [{"offsets":
+    {"from": ms, "to": ms}, "text": ...}, ...]}. Returns None on any I/O or
+    shape problem — callers treat that the same as "backend gave nothing"."""
+    try:
+        data = json.loads(json_path.read_text())
+    except (OSError, ValueError):
+        return None
+    out = []
+    for seg in data.get("transcription", []):
+        text = (seg.get("text") or "").strip()
+        if not text:
+            continue
+        offsets = seg.get("offsets") or {}
+        out.append({"start": offsets.get("from", 0) / 1000.0,
+                    "end": offsets.get("to", 0) / 1000.0, "text": text})
+    return out or None
+
+
+def _parse_openai_whisper_json(json_path: Path):
+    """openai-whisper --output_format json writes {"text": ..., "segments":
+    [{"start": sec, "end": sec, "text": ...}, ...], "language": ...}."""
+    try:
+        data = json.loads(json_path.read_text())
+    except (OSError, ValueError):
+        return None
+    out = []
+    for seg in data.get("segments", []):
+        text = (seg.get("text") or "").strip()
+        if not text:
+            continue
+        out.append({"start": seg.get("start", 0.0), "end": seg.get("end", 0.0), "text": text})
+    return out or None
+
+
+def _run_backend(backend, audio_path, language, model_name=None, want_segments=False):
+    """Returns (text, duration, language, segments). `segments` is a list of
+    {start, end, text} dicts when the backend produced them (only attempted
+    when want_segments is True), or None otherwise — None means "this backend
+    could not supply timestamps for this run", never a fabricated guess."""
     # When zh conversion is active, bias models toward Traditional vocabulary.
     # Safe for non-Chinese audio (prompt does not affect en/ja/... generation).
     zh_prompt = _ZH_PROMPT if _get_zh_converter() else None
@@ -558,16 +657,23 @@ def _run_backend(backend, audio_path, language, model_name=None):
             kw["initial_prompt"] = zh_prompt
         r = mlx_whisper.transcribe(audio_path, **kw)
         dur = r["segments"][-1]["end"] if r.get("segments") else 0.0
-        return r["text"].strip(), dur, r.get("language", language or "")
+        segments = None
+        if want_segments and r.get("segments"):
+            segments = [{"start": s["start"], "end": s["end"], "text": s["text"].strip()}
+                        for s in r["segments"]]
+        return r["text"].strip(), dur, r.get("language", language or ""), segments
     if backend == "faster-whisper":
         from faster_whisper import WhisperModel
         model = WhisperModel(model_id)
-        segments, info = model.transcribe(audio_path, language=language,
-                                          initial_prompt=zh_prompt)
-        segs = list(segments)
+        raw_segments, info = model.transcribe(audio_path, language=language,
+                                              initial_prompt=zh_prompt)
+        segs = list(raw_segments)
         text = " ".join(s.text.strip() for s in segs)
         dur = segs[-1].end if segs else 0.0
-        return text, dur, info.language
+        segments = None
+        if want_segments and segs:
+            segments = [{"start": s.start, "end": s.end, "text": s.text.strip()} for s in segs]
+        return text, dur, info.language, segments
     if backend == "whisper-cpp":
         workdir = tempfile.mkdtemp(prefix="audio-tldr-cpp-")
         try:
@@ -579,25 +685,66 @@ def _run_backend(backend, audio_path, language, model_name=None):
                    "-f", wav, "--output-txt", "--no-prints", "-l", language or "auto"]
             if zh_prompt:
                 cmd += ["--prompt", zh_prompt]
+            if want_segments:
+                cmd += ["--output-json"]
             subprocess.run(cmd, capture_output=True, check=True, timeout=7200)
-            return Path(wav + ".txt").read_text().strip(), 0.0, language or ""
+            text = Path(wav + ".txt").read_text().strip()
+            segments = _parse_whisper_cpp_json(Path(wav + ".json")) if want_segments else None
+            return text, 0.0, language or "", segments
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
     if backend == "openai-whisper":
         outdir = tempfile.mkdtemp(prefix="audio-tldr-")
         try:
+            # "all" also writes vtt/srt/tsv we don't use, but it's the only way to
+            # get json (for segments) without changing what the txt file contains.
+            out_fmt = "all" if want_segments else "txt"
             cmd = ["whisper", audio_path, "--model", model_id,
-                   "--output_format", "txt", "--output_dir", outdir]
+                   "--output_format", out_fmt, "--output_dir", outdir]
             if language:
                 cmd += ["--language", language]
             if zh_prompt:
                 cmd += ["--initial_prompt", zh_prompt]
             subprocess.run(cmd, capture_output=True, check=True, timeout=7200)
             txts = sorted(Path(outdir).glob("*.txt"))
-            return txts[0].read_text().strip(), 0.0, language or ""
+            text = txts[0].read_text().strip()
+            segments = None
+            if want_segments:
+                jsons = sorted(Path(outdir).glob("*.json"))
+                segments = _parse_openai_whisper_json(jsons[0]) if jsons else None
+            return text, 0.0, language or "", segments
         finally:
             shutil.rmtree(outdir, ignore_errors=True)
     raise ValueError(f"unknown backend {backend}")
+
+
+def _ensure_subtitle(d: Path, meta: dict, fmt: str):
+    """On a cache hit for --format srt/vtt: reuse the requested subtitle file if
+    it's already on disk; else rebuild it from the cache entry's segments.json
+    (cheap — no re-transcription) if that exists; else there is nothing to
+    build it from (a pre-v0.6.0 entry, or one last transcribed as --format txt)
+    and the caller must be told to re-transcribe. Returns (path_str, error);
+    exactly one of the two is None."""
+    sub_path = d / f"transcript.{fmt}"
+    if sub_path.exists():
+        return str(sub_path), None
+    seg_path = meta.get("segments_path")
+    if not seg_path or not Path(seg_path).exists():
+        return None, (
+            f"cached transcript has no segment timestamps for --format {fmt} "
+            "(cached before subtitle export was added, or last transcribed with "
+            f"--format txt) — re-run with --force --format {fmt} to regenerate with timestamps")
+    try:
+        segments = json.loads(Path(seg_path).read_text())
+    except (OSError, ValueError):
+        return None, (
+            f"cached segments.json is unreadable — re-run with --force --format {fmt} "
+            "to regenerate with timestamps")
+    lang = meta.get("language")
+    segments = [{**s, "text": _maybe_to_traditional(s["text"], lang)} for s in segments]
+    content = format_srt(segments) if fmt == "srt" else format_vtt(segments)
+    sub_path.write_text(content)
+    return str(sub_path), None
 
 
 def main(argv=None):
@@ -621,7 +768,12 @@ def main(argv=None):
                     help="keep the downloaded audio in the cache entry instead of deleting it (URL sources)")
     ap.add_argument("--doctor", action="store_true",
                     help="diagnose the environment (python, backends, tools, other interpreters, Metal) as JSON")
+    ap.add_argument("--format", choices=["txt", "srt", "vtt"], default="txt",
+                    help="output format (default: txt, unchanged behavior). srt/vtt additionally "
+                         "write a subtitle file with segment timestamps alongside transcript.txt; "
+                         "errors clearly if the backend or cache entry has no timestamps")
     args = ap.parse_args(raw_argv)
+    want_segments = args.format in ("srt", "vtt")
 
     if args.doctor:
         return cmd_doctor()
@@ -654,9 +806,16 @@ def main(argv=None):
 
     prune_expired()  # no-op unless the user configured a retention
     key = cache_key(args.source)
+    d = cache_dir() / key
     if not args.force:
         meta = load_cached(key)
         if meta:
+            if want_segments:
+                sub_path, err = _ensure_subtitle(d, meta, args.format)
+                if err:
+                    print(err, file=sys.stderr)
+                    return 2
+                meta = {**meta, f"{args.format}_path": sub_path}
             if args.keep_audio and not meta.get("audio_path"):
                 print("note: --keep-audio ignored on cache hit (transcript already cached; "
                       "re-run with --force to download and keep the audio)", file=sys.stderr)
@@ -676,7 +835,6 @@ def main(argv=None):
     tmpdir = None
     kept_audio = None
     media_url = None
-    d = cache_dir() / key
     try:
         if is_url(args.source):
             tmpdir = tempfile.mkdtemp(prefix="audio-tldr-dl-")
@@ -692,7 +850,8 @@ def main(argv=None):
                       file=sys.stderr)
                 audio_path, dl_title = download_audio(media_url, Path(tmpdir))
                 title = ep_title or dl_title
-        text, duration, lang = _run_backend(backend, audio_path, args.language, args.model)
+        text, duration, lang, segments = _run_backend(
+            backend, audio_path, args.language, args.model, want_segments=want_segments)
         if args.keep_audio and tmpdir:
             # Audio retention is an optional side-effect: its failure must never
             # discard the (potentially expensive) transcription that already succeeded.
@@ -743,7 +902,31 @@ def main(argv=None):
         kept_audio = d / "audio.mp3"
     if kept_audio is not None:
         meta["audio_path"] = str(kept_audio)
+
+    sub_error = None
+    if want_segments:
+        if segments:
+            # Cache the raw (pre-OpenCC) segments once — a later request for the
+            # *other* subtitle format reformats from this instead of re-transcribing.
+            seg_path = d / "segments.json"
+            seg_path.write_text(json.dumps(segments, ensure_ascii=False))
+            zh_segments = [{**s, "text": _maybe_to_traditional(s["text"], lang)} for s in segments]
+            content = format_srt(zh_segments) if args.format == "srt" else format_vtt(zh_segments)
+            sub_path = d / f"transcript.{args.format}"
+            sub_path.write_text(content)
+            meta["segments_path"] = str(seg_path)
+            meta[f"{args.format}_path"] = str(sub_path)
+        else:
+            sub_error = (
+                f"backend {backend} does not provide segment-level timestamps needed for "
+                f"--format {args.format}; the transcript was still cached as text "
+                "(switch to a backend with segment support, e.g. mlx-whisper or "
+                "faster-whisper, and re-run with --force)")
+
     (d / "meta.json").write_text(json.dumps(meta, ensure_ascii=False))
+    if sub_error:
+        print(sub_error, file=sys.stderr)
+        return 2
     print(json.dumps({**meta, "cache_hit": False}, ensure_ascii=False))
     return 0
 

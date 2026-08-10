@@ -43,7 +43,23 @@ Optional flags: `--language zh` (force language), `--model <name>` (whisper mode
 complains about speed/quality, or the `model` preference is set — per-request ask beats the
 preference), `--force` (ignore cache), `--keep-audio`
 (keep the downloaded mp3 in the cache entry — pass it when the `auto_delete_audio` preference
-is `off`), `--doctor` (environment diagnosis as JSON).
+is `off`), `--doctor` (environment diagnosis as JSON), `--format txt|srt|vtt` (default `txt`;
+pass it when the user asks for subtitles / closed captions / an `.srt` or `.vtt` file).
+
+**`--format srt` / `--format vtt`** additionally write a subtitle file (`transcript.srt` /
+`transcript.vtt`, path returned as `srt_path` / `vtt_path`) with segment-level timestamps,
+alongside the usual `transcript.txt` — the plain-text transcript is unaffected either way. All
+four backends support it. Two failure modes are reported on stderr with exit `2` rather than
+producing a broken or timestamp-less file:
+- The cache entry was transcribed before this feature existed, or last transcribed with
+  `--format txt` — no segment data exists to build subtitles from. Show the stderr message
+  (it names the fix) and, if the user wants subtitles, re-run with `--force --format srt`
+  (or `vtt`) to re-transcribe with timestamps. Requesting the *other* subtitle format on an
+  entry that already has segments (e.g. `vtt` after an earlier `srt` run) reuses them instantly
+  — no re-transcription needed, this is not an error case.
+- A backend genuinely returned no segment timestamps for that run — switch to a backend that
+  supports it (mlx-whisper, faster-whisper, whisper.cpp, and openai-whisper all normally do)
+  and re-run with `--force`.
 
 The script picks its own interpreter: if the current Python lacks a whisper backend, it probes
 common candidates (Homebrew python3.12/3.13, ...) and transparently re-execs into one that has
@@ -56,11 +72,13 @@ stderr note names which one, and the cache binds to that episode's URL (so the s
 picks up the new latest episode next time, and pasting the episode link directly hits the same
 cache entry).
 
-The script prints one JSON line: `{transcript_path, title, duration, language, backend, model, cache_hit}` (plus `audio_path` when `--keep-audio` kept a download).
+The script prints one JSON line: `{transcript_path, title, duration, language, backend, model, cache_hit}` (plus `audio_path` when `--keep-audio` kept a download, and `srt_path` / `vtt_path` when `--format srt`/`vtt` produced a subtitle file).
 
 **Exit codes — handle them, don't guess:**
 - `0` OK → proceed to Phase 2.
-- `2` download/backend runtime error → show the stderr message to the user (it contains the fix, e.g. installing yt-dlp/ffmpeg).
+- `2` download/backend runtime error, or a `--format srt`/`vtt` request that couldn't be
+  fulfilled (see above) → show the stderr message to the user (it contains the fix, e.g.
+  installing yt-dlp/ffmpeg, or re-running with `--force`).
 - `3` no whisper backend installed → run `--doctor` FIRST and show its findings before suggesting
   any install. The script already auto-probes other interpreters, so a real exit 3 means no
   probed Python has a backend. Never recommend reinstalling a backend `--doctor` shows as present.

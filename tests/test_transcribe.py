@@ -200,8 +200,10 @@ def test_load_cached_hit(tmp_path, monkeypatch):
     assert got["title"] == "x"
 
 
-def _fake_transcription(monkeypatch, tmp_path):
-    """Stub download + backend so main() runs the URL path without network/whisper."""
+def _fake_transcription(monkeypatch, tmp_path, segments=None):
+    """Stub download + backend so main() runs the URL path without network/whisper.
+    `segments` (default None = backend has no segment support) is returned verbatim
+    whenever a caller passes want_segments=True, mirroring a real backend."""
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
     monkeypatch.setattr(transcribe, "detect_backend", lambda: "mlx-whisper")
 
@@ -211,7 +213,9 @@ def _fake_transcription(monkeypatch, tmp_path):
         return str(p), "Fake Title"
 
     monkeypatch.setattr(transcribe, "download_audio", fake_download)
-    monkeypatch.setattr(transcribe, "_run_backend", lambda b, a, l, m=None: ("hello", 12.3, "en"))
+    monkeypatch.setattr(
+        transcribe, "_run_backend",
+        lambda b, a, l, m=None, want_segments=False: ("hello", 12.3, "en", segments))
 
 
 def test_keep_audio_moves_mp3_into_cache_entry(monkeypatch, tmp_path, capsys):
@@ -619,3 +623,337 @@ def test_zh_convert_default_is_s2twp(monkeypatch):
     monkeypatch.setattr(transcribe, "_OPENCC", None)  # reset lazy cache
     transcribe._get_zh_converter()
     assert seen["cfg"] == "s2twp"
+
+
+# ── Subtitle export: timestamp formatting (v0.6.0) ──────────────────
+
+def test_timestamp_zero():
+    assert transcribe._format_timestamp(0, ",") == "00:00:00,000"
+    assert transcribe._format_timestamp(0, ".") == "00:00:00.000"
+
+
+def test_timestamp_over_one_hour():
+    assert transcribe._format_timestamp(3661.5, ",") == "01:01:01,500"
+    assert transcribe._format_timestamp(3661.5, ".") == "01:01:01.500"
+
+
+def test_timestamp_millisecond_rounding_half_up():
+    # Decimal-based rounding avoids binary-float .5 landmines (e.g. round()'s
+    # banker's rounding); 1.2345s -> 1234.5ms -> rounds up to 1235ms.
+    assert transcribe._format_timestamp(1.2345, ",") == "00:00:01,235"
+
+
+def test_timestamp_rounding_rolls_over_to_next_minute():
+    # 59.9995s rounds up to exactly 60.000s -> carries into the minutes field.
+    assert transcribe._format_timestamp(59.9995, ",") == "00:01:00,000"
+
+
+def test_timestamp_negative_clamped_to_zero():
+    assert transcribe._format_timestamp(-0.5, ",") == "00:00:00,000"
+
+
+# ── Subtitle export: SRT/VTT formatting (v0.6.0) ─────────────────────
+
+def test_format_srt_basic():
+    segments = [{"start": 0.0, "end": 1.234, "text": "Hello"},
+                {"start": 1.234, "end": 3.0, "text": "World"}]
+    assert transcribe.format_srt(segments) == (
+        "1\n00:00:00,000 --> 00:00:01,234\nHello\n\n"
+        "2\n00:00:01,234 --> 00:00:03,000\nWorld\n"
+    )
+
+
+def test_format_vtt_basic():
+    segments = [{"start": 0.0, "end": 1.234, "text": "Hello"},
+                {"start": 1.234, "end": 3.0, "text": "World"}]
+    assert transcribe.format_vtt(segments) == (
+        "WEBVTT\n\n00:00:00.000 --> 00:00:01.234\nHello\n\n"
+        "00:00:01.234 --> 00:00:03.000\nWorld\n"
+    )
+
+
+def test_format_srt_strips_and_skips_empty_segments():
+    segments = [{"start": 0.0, "end": 1.0, "text": "   "},
+                {"start": 1.0, "end": 2.0, "text": "  Real line  "}]
+    out = transcribe.format_srt(segments)
+    assert out == "1\n00:00:01,000 --> 00:00:02,000\nReal line\n"
+
+
+def test_format_vtt_no_segments_is_bare_header():
+    assert transcribe.format_vtt([]) == "WEBVTT\n"
+
+
+def test_format_srt_no_segments_is_empty():
+    assert transcribe.format_srt([]) == ""
+
+
+# ── Subtitle export: per-backend segment capture (v0.6.0) ────────────
+
+def test_run_backend_mlx_whisper_captures_segments(monkeypatch):
+    import sys, types
+    fake = types.ModuleType("mlx_whisper")
+
+    def fake_transcribe(path, **kw):
+        return {
+            "text": "hello world",
+            "language": "en",
+            "segments": [
+                {"start": 0.0, "end": 1.0, "text": " hello"},
+                {"start": 1.0, "end": 2.0, "text": " world"},
+            ],
+        }
+    fake.transcribe = fake_transcribe
+    monkeypatch.setitem(sys.modules, "mlx_whisper", fake)
+    text, dur, lang, segments = transcribe._run_backend(
+        "mlx-whisper", "/tmp/x.mp3", None, want_segments=True)
+    assert text == "hello world" and lang == "en" and dur == 2.0
+    assert segments == [{"start": 0.0, "end": 1.0, "text": "hello"},
+                         {"start": 1.0, "end": 2.0, "text": "world"}]
+
+
+def test_run_backend_mlx_whisper_skips_segments_when_not_wanted(monkeypatch):
+    import sys, types
+    fake = types.ModuleType("mlx_whisper")
+    fake.transcribe = lambda path, **kw: {
+        "text": "hi", "language": "en",
+        "segments": [{"start": 0.0, "end": 1.0, "text": "hi"}],
+    }
+    monkeypatch.setitem(sys.modules, "mlx_whisper", fake)
+    _, _, _, segments = transcribe._run_backend(
+        "mlx-whisper", "/tmp/x.mp3", None, want_segments=False)
+    assert segments is None
+
+
+def test_run_backend_faster_whisper_captures_segments(monkeypatch):
+    import sys, types
+    from collections import namedtuple
+    Segment = namedtuple("Segment", ["start", "end", "text"])
+    Info = namedtuple("Info", ["language"])
+    fake = types.ModuleType("faster_whisper")
+
+    class FakeModel:
+        def __init__(self, model_id):
+            pass
+
+        def transcribe(self, audio_path, language=None, initial_prompt=None):
+            segs = [Segment(0.0, 1.5, " hi"), Segment(1.5, 3.0, " there")]
+            return iter(segs), Info(language="en")
+    fake.WhisperModel = FakeModel
+    monkeypatch.setitem(sys.modules, "faster_whisper", fake)
+    text, dur, lang, segments = transcribe._run_backend(
+        "faster-whisper", "/tmp/x.mp3", None, want_segments=True)
+    assert text == "hi there" and lang == "en" and dur == 3.0
+    assert segments == [{"start": 0.0, "end": 1.5, "text": "hi"},
+                         {"start": 1.5, "end": 3.0, "text": "there"}]
+
+
+def test_parse_whisper_cpp_json_extracts_segments(tmp_path):
+    payload = {
+        "transcription": [
+            {"timestamps": {"from": "00:00:00,000", "to": "00:00:01,000"},
+             "offsets": {"from": 0, "to": 1000}, "text": " hello"},
+            {"timestamps": {"from": "00:00:01,000", "to": "00:00:02,000"},
+             "offsets": {"from": 1000, "to": 2000}, "text": "  "},  # blank -> dropped
+        ]
+    }
+    p = tmp_path / "audio.16k.wav.json"
+    p.write_text(json.dumps(payload))
+    segments = transcribe._parse_whisper_cpp_json(p)
+    assert segments == [{"start": 0.0, "end": 1.0, "text": "hello"}]
+
+
+def test_parse_whisper_cpp_json_missing_file_returns_none(tmp_path):
+    assert transcribe._parse_whisper_cpp_json(tmp_path / "nope.json") is None
+
+
+def test_run_backend_whisper_cpp_requests_json_only_when_wanted(monkeypatch, tmp_path):
+    monkeypatch.setenv("AUDIO_TLDR_WHISPER_CPP_MODEL", str(tmp_path / "ggml.bin"))
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        if cmd[0] == "ffmpeg":
+            class R:
+                returncode = 0
+            return R()
+        # whisper-cli invocation: locate the -f wav path and write outputs
+        wav = Path(cmd[cmd.index("-f") + 1])
+        wav_path = Path(str(wav) + ".txt")
+        wav_path.write_text("hello world")
+        if "--output-json" in cmd:
+            payload = {"transcription": [
+                {"offsets": {"from": 0, "to": 1000}, "text": "hello world"}]}
+            Path(str(wav) + ".json").write_text(json.dumps(payload))
+
+        class R:
+            returncode = 0
+        return R()
+
+    monkeypatch.setattr(transcribe.subprocess, "run", fake_run)
+    # no --format srt/vtt -> should not request json
+    text, dur, lang, segments = transcribe._run_backend(
+        "whisper-cpp", "/tmp/in.mp3", None, want_segments=False)
+    assert text == "hello world" and segments is None
+    assert not any("--output-json" in c for c in calls)
+
+    calls.clear()
+    text, dur, lang, segments = transcribe._run_backend(
+        "whisper-cpp", "/tmp/in.mp3", None, want_segments=True)
+    assert segments == [{"start": 0.0, "end": 1.0, "text": "hello world"}]
+    assert any("--output-json" in c for c in calls)
+
+
+def test_parse_openai_whisper_json_extracts_segments(tmp_path):
+    payload = {"text": "hello world", "language": "en", "segments": [
+        {"start": 0.0, "end": 1.0, "text": " hello"},
+        {"start": 1.0, "end": 2.0, "text": " world"},
+    ]}
+    p = tmp_path / "out.json"
+    p.write_text(json.dumps(payload))
+    segments = transcribe._parse_openai_whisper_json(p)
+    assert segments == [{"start": 0.0, "end": 1.0, "text": "hello"},
+                         {"start": 1.0, "end": 2.0, "text": "world"}]
+
+
+def test_run_backend_openai_whisper_requests_all_only_when_wanted(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        outdir = Path(cmd[cmd.index("--output_dir") + 1])
+        (outdir / "out.txt").write_text("hello world")
+        if "all" in cmd:
+            payload = {"text": "hello world", "segments": [
+                {"start": 0.0, "end": 1.0, "text": "hello world"}]}
+            (outdir / "out.json").write_text(json.dumps(payload))
+
+        class R:
+            returncode = 0
+        return R()
+
+    monkeypatch.setattr(transcribe.subprocess, "run", fake_run)
+    text, dur, lang, segments = transcribe._run_backend(
+        "openai-whisper", "/tmp/in.mp3", None, want_segments=False)
+    assert text == "hello world" and segments is None
+    assert "txt" in calls[0] and "all" not in calls[0]
+
+    calls.clear()
+    text, dur, lang, segments = transcribe._run_backend(
+        "openai-whisper", "/tmp/in.mp3", None, want_segments=True)
+    assert segments == [{"start": 0.0, "end": 1.0, "text": "hello world"}]
+    assert "all" in calls[0]
+
+
+# ── Subtitle export: main() integration (v0.6.0) ─────────────────────
+
+def test_default_format_is_txt_and_writes_no_subtitle_artifacts(monkeypatch, tmp_path, capsys):
+    _fake_transcription(monkeypatch, tmp_path,
+                         segments=[{"start": 0.0, "end": 1.0, "text": "hi"}])
+    rc = transcribe.main(["https://youtu.be/defaultfmt"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    key = transcribe.cache_key("https://youtu.be/defaultfmt")
+    d = tmp_path / "audio-tldr" / key
+    assert not (d / "segments.json").exists()
+    assert not (d / "transcript.srt").exists()
+    assert "srt_path" not in out and "segments_path" not in out
+
+
+def test_format_srt_writes_subtitle_and_segments_cache(monkeypatch, tmp_path, capsys):
+    _fake_transcription(monkeypatch, tmp_path,
+                         segments=[{"start": 0.0, "end": 1.0, "text": "hi"},
+                                   {"start": 1.0, "end": 2.5, "text": "there"}])
+    rc = transcribe.main(["https://youtu.be/srtreq", "--format", "srt"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    key = transcribe.cache_key("https://youtu.be/srtreq")
+    d = tmp_path / "audio-tldr" / key
+    assert (d / "segments.json").exists()
+    srt_path = Path(out["srt_path"])
+    assert srt_path.exists() and srt_path.read_text().startswith("1\n00:00:00,000")
+    assert "there" in srt_path.read_text()
+
+
+def test_format_vtt_writes_subtitle(monkeypatch, tmp_path, capsys):
+    _fake_transcription(monkeypatch, tmp_path,
+                         segments=[{"start": 0.0, "end": 1.0, "text": "hi"}])
+    rc = transcribe.main(["https://youtu.be/vttreq", "--format", "vtt"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    vtt_path = Path(out["vtt_path"])
+    assert vtt_path.read_text().startswith("WEBVTT\n\n00:00:00.000")
+
+
+def test_format_srt_backend_without_segments_errors_but_keeps_txt_cached(
+        monkeypatch, tmp_path, capsys):
+    _fake_transcription(monkeypatch, tmp_path, segments=None)  # backend can't provide them
+    rc = transcribe.main(["https://youtu.be/nosegs", "--format", "srt"])
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "does not" in captured.err or "did not" in captured.err
+    key = transcribe.cache_key("https://youtu.be/nosegs")
+    d = tmp_path / "audio-tldr" / key
+    assert (d / "transcript.txt").exists()          # transcription itself is not wasted
+    assert not (d / "transcript.srt").exists()
+
+
+def test_srt_request_on_legacy_cache_errors_with_force_hint(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    src = "https://youtu.be/legacycache"
+    key = transcribe.cache_key(src)
+    _make_entry(tmp_path, key)  # pre-v0.6.0 shape: no segments_path in meta
+    rc = transcribe.main([src, "--format", "srt"])
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "--force" in captured.err
+
+
+def test_cache_hit_reformats_from_cached_segments_without_retranscribing(
+        monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    src = "https://youtu.be/reformat"
+    key = transcribe.cache_key(src)
+    d = tmp_path / "audio-tldr" / key
+    d.mkdir(parents=True)
+    t = d / "transcript.txt"
+    t.write_text("hello world")
+    seg_path = d / "segments.json"
+    seg_path.write_text(json.dumps([{"start": 0.0, "end": 1.5, "text": "hello world"}]))
+    (d / "meta.json").write_text(json.dumps({
+        "transcript_path": str(t), "title": "t", "language": "en",
+        "segments_path": str(seg_path),
+    }))
+
+    def boom(*a, **kw):
+        raise AssertionError("must not re-transcribe when segments are already cached")
+    monkeypatch.setattr(transcribe, "download_audio", boom)
+    monkeypatch.setattr(transcribe, "_run_backend", boom)
+
+    rc = transcribe.main([src, "--format", "vtt"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0 and out["cache_hit"] is True
+    vtt_path = Path(out["vtt_path"])
+    assert vtt_path.exists() and vtt_path.read_text().startswith("WEBVTT")
+
+
+def test_cache_hit_reuses_existing_subtitle_file_without_rewriting(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    src = "https://youtu.be/reuse"
+    key = transcribe.cache_key(src)
+    d = tmp_path / "audio-tldr" / key
+    d.mkdir(parents=True)
+    t = d / "transcript.txt"
+    t.write_text("hello")
+    seg_path = d / "segments.json"
+    seg_path.write_text(json.dumps([{"start": 0.0, "end": 1.0, "text": "hello"}]))
+    srt_path = d / "transcript.srt"
+    srt_path.write_text("SENTINEL-ALREADY-WRITTEN")
+    (d / "meta.json").write_text(json.dumps({
+        "transcript_path": str(t), "title": "t", "language": "en",
+        "segments_path": str(seg_path), "srt_path": str(srt_path),
+    }))
+    rc = transcribe.main([src, "--format", "srt"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert srt_path.read_text() == "SENTINEL-ALREADY-WRITTEN"  # not clobbered
+    assert out["srt_path"] == str(srt_path)
