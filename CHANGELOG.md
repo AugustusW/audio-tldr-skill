@@ -25,10 +25,27 @@ entry below.**
   stderr message naming the fix (`--force --format srt`/`vtt`) instead of silently guessing or
   re-transcribing behind the user's back.
 - `SKILL.md` — documents the `--format` flag and both subtitle-request failure modes.
-- 25 new offline unit tests (118 total): SRT/VTT formatting, timestamp conversion (zero, >1h,
-  millisecond rounding, minute rollover, negative clamping), per-backend segment capture
-  (all four backends), cache-without-segments fallback, cache-reuse-across-formats, and
-  default-`txt`-unchanged.
+- **`digest_model: ollama:<model>`** — opt-in, fully-local Phase 2 digest. A new
+  `scripts/digest.py` relays an agent-assembled instructions block (template/description +
+  stated needs + output language + the untrusted-content rule verbatim — the same content the
+  subagent-dispatch prompt already carries) plus the transcript to the user's own local
+  [Ollama](https://ollama.com) server (`POST /api/chat`, `stream: false`, stdlib `urllib` only,
+  no new dependency) and prints back the digest text, so the transcript text never leaves the
+  machine either. Server address: `AUDIO_TLDR_OLLAMA_HOST` env var (default
+  `http://localhost:11434`), mirroring the `--model`/`AUDIO_TLDR_MODEL` CLI-flag-beats-env-var
+  layering already used elsewhere — deliberately the *only* config channel, no parallel
+  preferences-file field. An unreachable server or an unpulled model reports a specific error
+  and exit 2; it never silently falls back to a subagent or inline digest, since that would
+  defeat the reason the mode was chosen. Default behavior (no `digest_model`, or a plain model
+  name) is completely unchanged — this is purely additive.
+- `SKILL.md` + both READMEs — document the Ollama mode, its honest quality tradeoff (a small
+  local model digests worse than the sonnet/GPT-class subagent path), and the privacy rationale
+  (the digest phase, not just transcription, becomes zero network egress).
+- 44 new offline unit tests (137 total): 25 for subtitle export (as above) + 19 for the Ollama
+  bridge — endpoint resolution (CLI/env/default layering), message construction, request/response
+  shape against a mocked HTTP endpoint, unreachable-server and model-missing error
+  classification, and `main()` wiring (stdin vs. `--instructions-file`, missing-file errors,
+  and confirming a failure never prints a fallback digest).
 
 ### Fixed
 

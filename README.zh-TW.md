@@ -47,6 +47,7 @@
 - ✓ 摘要成品存入 output 資料夾，可選 Markdown 或 HTML——逐字稿留在快取
 - ✓ 對話式詢問：請求沒說要怎麼整理時，agent 用純文字列出樣板選單詢問
 - ✓ 整理樣板：會議記錄／重點摘要／分析報告——也可把自己的格式存成樣板重用
+- ✓ 選配全本機摘要：`digest_model: ollama:<model>` 讓第二階段改走你自己的 Ollama server——逐字稿文字也不離開電腦
 - ✓ 摘要層翻譯：任何語言輸出摘要，或忠實全文翻譯
 - ✓ 選配習慣設定檔——不設也能用，零門檻
 - ✓ interpreter 自動選擇：backend 裝在別的 Python（如 homebrew）會自動找到並切換；`--doctor` 一鍵診斷環境
@@ -248,7 +249,9 @@ python3 scripts/transcribe.py --format vtt "<來源>"   # transcript.vtt，標�
   合理位置：yt-dlp 會連來源網站下載 URL 內容、whisper 後端初次使用可能自模型庫下載模型（依賴套件的
   行為由各該專案自理）。
 - **Digest 階段會把逐字稿文字（絕不是音訊）送進模型**——在你自己的 Claude session 內，跟請 Claude
-  讀任何本機檔案完全一樣。
+  讀任何本機檔案完全一樣。**例外：** 設定 `digest_model: ollama:<model>` 後改走你自己的本機
+  Ollama server——逐字稿文字同樣不離開電腦，換來全流程本機化（代價是本機小模型的摘要品質較低）。
+  詳見[整理樣板](#整理樣板)。
 - **快取逐字稿是未加密純文字、預設永久保存**，位於 `~/.cache/audio-tldr/`。處理敏感內容後請 `--clear`
   該筆，或預先設定 retention。
 - **摘要成品長存於 output 資料夾**（預設 `./audio-tldr-output/`，相對於工作目錄）——包含全文翻譯
@@ -286,7 +289,7 @@ model: large-v3
 | `auto_delete_audio` | `on` | 轉錄完刪除下載音檔；`off` 則 mp3 留在快取資料夾 |
 | `output_format` | `md` | 摘要檔格式 `md` 或 `html`；當次對話指定優先於此欄 |
 | `model` | `large-v3-turbo` | 轉錄用的 whisper 模型（以 `--model` 傳入）；當次對話指定優先於此欄 |
-| `digest_model` | （平台預設） | 摘要 subagent 用的模型——未設＝平台預設（Claude Code：`sonnet`；Codex：`GPT-5.6 Terra`）；填模型名＝指定；`off`＝不派 subagent、當前 agent 直接摘要（通常較耗額度） |
+| `digest_model` | （平台預設） | 摘要用的模型——未設＝平台預設 subagent（Claude Code：`sonnet`；Codex：`GPT-5.6 Terra`）；填模型名＝指定 subagent 模型；`ollama:<model>`（例：`ollama:llama3.2`）＝改走你自己的本機 Ollama server，見下方；`off`＝不派 subagent、當前 agent 直接摘要（通常較耗額度） |
 
 此檔由 agent 讀取（Claude Code 與 Codex 共用）——安裝時不會要求設定，檔案不存在時一律走預設。
 
@@ -311,6 +314,16 @@ model: large-v3
 
 **省額度摘要：**支援 subagent 的平台上，摘要預設交給較便宜的模型（Claude Code：`sonnet`；
 Codex：`GPT-5.6 Terra`）——用 `digest_model` 偏好指定模型或關閉（`off`＝當前 agent 直接摘要）。
+
+**全本機摘要（Ollama）：**設定 `digest_model: ollama:<model>`（例：`ollama:llama3.2`）後，
+第二階段改由 `scripts/digest.py` 呼叫你自己的本機 [Ollama](https://ollama.com) server，
+不再派任何 agent subagent——逐字稿文字也不離開電腦，在原本就本機化的轉錄管線之上再進一步。
+需要先裝好 Ollama、`ollama serve` 已啟動、模型已 pull（`ollama pull <model>`）——跟 whisper
+後端一樣是使用者自己的責任，不會自動安裝或下載任何東西。伺服器位址預設
+`http://localhost:11434`；Ollama 跑在區網其他機器時用 `AUDIO_TLDR_OLLAMA_HOST` 覆蓋。
+連不上 server 或模型沒 pull 時，agent 會回報明確錯誤並停下——絕不悄悄退回 agent-session
+摘要，那樣會違背選這個模式的本意。代價：本機小模型的摘要品質通常低於 subagent 路徑
+（sonnet / GPT 等級模型）。
 
 ## 快取與設定
 
@@ -337,13 +350,14 @@ Codex：`GPT-5.6 Terra`）——用 `digest_model` 偏好指定模型或關閉�
 | `AUDIO_TLDR_WHISPER_CPP_MODEL` | ggml 模型檔路徑（啟用 whisper.cpp 後端） |
 | `AUDIO_TLDR_ZH_CONVERT` | 中文轉換：`off`，或任何 OpenCC 設定（預設 `s2twp`——台灣繁體含慣用語） |
 | `AUDIO_TLDR_PYTHON` | 指定執行的 Python interpreter（優先於自動探測）。whisper backend 裝在非預設 Python（如 homebrew 3.12）時適用 |
+| `AUDIO_TLDR_OLLAMA_HOST` | `digest_model: ollama:<model>` 用的 Ollama server 位址（預設 `http://localhost:11434`）；Ollama 跑在區網其他機器時設定 |
 
 ## 開發
 
 ```bash
 git clone https://github.com/AugustusW/audio-tldr-skill.git
 cd audio-tldr-skill
-python3 -m pytest tests/   # 118 個單元測試，不需網路或模型
+python3 -m pytest tests/   # 137 個單元測試，不需網路或模型
 ```
 
 版本規則：每次釋出必同步 bump `.claude-plugin/plugin.json` 與 `.claude-plugin/marketplace.json`
@@ -356,8 +370,8 @@ python3 -m pytest tests/   # 118 個單元測試，不需網路或模型
 
 ## 狀態
 
-v0.6.0（[CHANGELOG](./CHANGELOG.md)）——核心邏輯有 118 個離線單元測試（yt-dlp、whisper 後端、
-快取、OpenCC 皆以 mock 模擬，不需網路或模型）。完整流程於 2026-07-19 人工驗證
+v0.6.0（[CHANGELOG](./CHANGELOG.md)）——核心邏輯有 137 個離線單元測試（yt-dlp、whisper 後端、
+快取、OpenCC、Ollama HTTP 端點皆以 mock 模擬，不需網路或模型）。完整流程於 2026-07-19 人工驗證
 （真實 YouTube 下載、轉錄、快取重摘要、中文轉換、`--keep-audio`、output 資料夾 md/html 摘要、
 逐字稿翻譯、從 `/usr/bin/python3` 的 interpreter 自動切換、Apple Podcasts fallback 端到端——
 真實 53 分鐘節目經 iTunes lookup 解析、轉錄、原 Apple URL 二訪命中快取），環境如下：
@@ -375,7 +389,9 @@ Codex 支援依開放 SKILL.md 標準；轉錄核心已於 2026-07-19 在 Codex 
 （真實 53 分鐘 podcast 下載、轉錄、快取命中，含 interpreter 自動切換路徑）。
 摘要層功能（output 資料夾、翻譯、preferences）目前僅在 Claude Code 端驗證過。
 SRT/VTT 字幕匯出（v0.6.0）的四後端 segment 擷取與排版邏輯皆有單元測試覆蓋；真實轉錄產出字幕的
-端到端流程尚未在每個後端人工驗證過。可能的下一步：講者分離。歡迎開 issue 與 PR。
+端到端流程尚未在每個後端人工驗證過。Ollama 全本機摘要模式（v0.6.0）的單元測試覆蓋 mock HTTP
+端點（request 格式、response 解析、server 連不上、模型未 pull 等錯誤）；尚未對真實 Ollama server
+人工驗證過。可能的下一步：講者分離。歡迎開 issue 與 PR。
 
 ## 授權
 
