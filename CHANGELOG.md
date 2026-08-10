@@ -4,6 +4,47 @@ All notable changes to this project are documented here. **Every release bumps `
 `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` (kept identical) and adds an
 entry below.**
 
+## [0.6.0] - 2026-08-11
+
+### Added
+
+- **`--format txt|srt|vtt`** — `scripts/transcribe.py` can now emit standard SRT
+  (`HH:MM:SS,mmm -->`) or WebVTT (`WEBVTT` header, `HH:MM:SS.mmm -->`) subtitle files with
+  segment-level timestamps, alongside the usual `transcript.txt` (default `txt`, byte-identical
+  to pre-0.6.0 behavior — the plain-text path takes no extra work and no extra CLI flags).
+  Segment capture is implemented for all four backends: mlx-whisper and faster-whisper expose
+  segments directly from their Python API; whisper-cpp (`--output-json`) and openai-whisper
+  (`--output_format all`) get them from an additional machine-readable output file, requested
+  only when a subtitle format is actually asked for. A backend that genuinely returns no
+  segments for a given run fails clearly (exit 2, transcript still cached as text) instead of
+  fabricating timestamps.
+- **Subtitle caching** — segment data is cached once (`segments.json`) alongside the transcript;
+  requesting the *other* subtitle format later (e.g. `vtt` after an earlier `srt` run) reformats
+  from the cached segments instantly, no re-transcription. A cache entry with no segment data
+  (transcribed before this feature, or last transcribed with `--format txt`) gives a clear
+  stderr message naming the fix (`--force --format srt`/`vtt`) instead of silently guessing or
+  re-transcribing behind the user's back.
+- `SKILL.md` — documents the `--format` flag and both subtitle-request failure modes.
+- 25 new offline unit tests (118 total): SRT/VTT formatting, timestamp conversion (zero, >1h,
+  millisecond rounding, minute rollover, negative clamping), per-backend segment capture
+  (all four backends), cache-without-segments fallback, cache-reuse-across-formats, and
+  default-`txt`-unchanged.
+
+### Fixed
+
+- README.md / README.zh-TW.md `## Status` sections were still frozen at v0.4.0 / 63 tests
+  (the v0.5.1 fix only corrected the `## Develop` test count, not `## Status`) — both now read
+  v0.6.0 and the current test count.
+
+### Windows notes added (both READMEs)
+
+- Smart App Control can block the unsigned `yt-dlp.exe` shim (CodeIntegrity event 3077, the
+  binary silently never runs) — workaround is a `.cmd` shim that calls `python -m yt_dlp` from
+  the venv's signed `python.exe`; the `.cmd` file must have **CRLF** line endings or PowerShell
+  fails to execute it.
+- PowerShell splits an unquoted comma list into separate arguments — `--at` (from `frames.py`)
+  needs quotes: `--at "3,10,25"`, not `--at 3,10,25`.
+
 ## [0.5.1] - 2026-08-05
 
 ### Fixed

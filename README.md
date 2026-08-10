@@ -54,6 +54,7 @@ re-upload, re-transcribe, re-pay      transcribe once, reuse from cache
 - ✓ Interpreter auto-selection: backend installed in another Python (e.g. Homebrew) is found and used automatically; `--doctor` diagnoses the environment
 - ✓ Apple Podcasts fallback built in: when yt-dlp's extractor fails, episodes resolve via the iTunes lookup API — cache identity stays on your original link; a show link (no episode id) automatically uses the latest episode
 - ✓ Opt-in frame extraction for video sources: scene-detection slide capture, or stills at exact timestamps — video fetched at ≤720p and deleted after extraction; frames share the transcript's cache entry
+- ✓ Subtitle export: `--format srt` / `--format vtt` write a standard subtitle file with segment timestamps alongside the transcript, on any of the four backends
 - ✓ Install by copy, as a Claude Code plugin, **or** into Codex (open SKILL.md standard)
 
 ## Install
@@ -177,6 +178,20 @@ prefer the plugin install if you want managed versions.
   [faster-whisper README](https://github.com/SYSTRAN/faster-whisper#gpu).
 - mlx-whisper is Apple-Silicon-only. whisper.cpp on Windows needs a `whisper-cli.exe` on PATH
   plus `AUDIO_TLDR_WHISPER_CPP_MODEL`.
+- **Smart App Control may block `yt-dlp.exe`** — the prebuilt binary is unsigned, and Smart App
+  Control silently refuses to run it (Event Viewer shows a CodeIntegrity event 3077 for the
+  file). It does not prompt; `yt-dlp` just never runs. Workaround: point yt-dlp's shim at your
+  venv's signed `python.exe` instead of the unsigned exe — create `yt-dlp.cmd` on PATH:
+  ```bat
+  @echo off
+  "%~dp0python.exe" -m yt_dlp %*
+  ```
+  The `.cmd` file **must have CRLF line endings** (Windows batch parsing is picky about this;
+  saving it as LF-only from a Unix tool can make it fail silently). Editors that default to LF
+  (or `git config core.autocrlf` set to `input`) will need an explicit CRLF save.
+- **Quote comma lists in PowerShell** — `frames.py --at 90,215,10:05` gets split by PowerShell
+  into three separate arguments before Python ever sees it (commas are not special-cased inside
+  quotes). Always quote: `--at "90,215,10:05"`.
 
 ## Usage
 
@@ -211,6 +226,27 @@ fetched at ≤720p and deleted right after extraction (`--keep-video` keeps it);
 are used in place and never modified. Frames and their `manifest.json` live in the same
 cache entry as the transcript, so repeated requests are instant. Pure logic is covered by
 automated tests; real-video extraction is verified manually per release.
+
+### Subtitles (SRT/VTT)
+
+```
+> transcribe this and give me subtitles: https://youtu.be/xxxx
+> srt file for ~/Videos/keynote.mp4
+```
+
+```bash
+python3 scripts/transcribe.py --format srt "<source>"   # transcript.srt, standard SRT
+python3 scripts/transcribe.py --format vtt "<source>"   # transcript.vtt, standard WebVTT
+```
+
+`--format` defaults to `txt` (unchanged). `srt`/`vtt` additionally write a subtitle file with
+segment-level timestamps next to `transcript.txt` — the plain transcript is unaffected either
+way. All four whisper backends support it. Segment data is cached once, so asking for the
+*other* subtitle format later (`vtt` after an earlier `srt` run, or vice versa) reformats
+from the cached segments instantly — no re-transcription. A cache entry from before this
+feature (or last transcribed with `--format txt`) has no segment data to build subtitles
+from: the script reports that clearly and names the fix (`--force --format srt`, or `vtt`, to
+re-transcribe with timestamps) rather than silently guessing or downgrading the request.
 
 ## How it works
 
@@ -323,6 +359,7 @@ Ask Claude, or run `scripts/transcribe.py` directly:
 | `--force` | re-transcribe one source, ignoring cache |
 | `--keep-audio` | keep the downloaded mp3 in the cache entry (default deletes it after transcription) |
 | `--doctor` | JSON environment diagnosis: Python path/version, backend & tool visibility, other interpreters that have a backend, MLX Metal availability |
+| `--format txt\|srt\|vtt` | output format (default `txt`, unchanged); `srt`/`vtt` also write a subtitle file with segment timestamps — see [Subtitles](#subtitles-srtvtt) |
 
 Environment variables:
 
@@ -338,7 +375,7 @@ Environment variables:
 ```bash
 git clone https://github.com/AugustusW/audio-tldr-skill.git
 cd audio-tldr-skill
-python3 -m pytest tests/   # 93 unit tests, no network or model needed
+python3 -m pytest tests/   # 118 unit tests, no network or model needed
 ```
 
 Versioning: every release bumps `version` in `.claude-plugin/plugin.json` **and**
@@ -352,7 +389,7 @@ Your preferences, custom templates (`~/.config/audio-tldr/`), and cache
 
 ## Status
 
-v0.4.0 ([CHANGELOG](./CHANGELOG.md)) — core logic is covered by 63 offline unit tests (yt-dlp,
+v0.6.0 ([CHANGELOG](./CHANGELOG.md)) — core logic is covered by 118 offline unit tests (yt-dlp,
 whisper backends, cache, and OpenCC are mocked; no network or models needed). The full flow has
 been manually verified (2026-07-19: real YouTube download, transcription, cached re-digest,
 Chinese conversion, `--keep-audio`, output-folder digests in md/html, transcript translation,
@@ -373,8 +410,10 @@ downloads, the other three backends, and Windows. Codex support follows the open
 standard; the transcription core was verified end-to-end inside Codex on 2026-07-19 (a real
 53-min podcast downloaded, transcribed, and cache-hit, including the interpreter
 auto-selection path). Digest-layer features (output folder, translation, preferences) have so
-far been exercised in Claude Code only. Possible next: SRT export, speaker diarization.
-Issues and PRs welcome.
+far been exercised in Claude Code only. SRT/VTT subtitle export (v0.6.0) is covered by unit
+tests on all four backends' segment-capture and formatting logic; end-to-end subtitle output
+from a real transcription has not yet been manually verified on every backend. Possible next:
+speaker diarization. Issues and PRs welcome.
 
 ## License
 
