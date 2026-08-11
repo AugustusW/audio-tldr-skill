@@ -409,7 +409,7 @@ Your preferences, custom templates (`~/.config/audio-tldr/`), and cache
 
 ## Status
 
-v0.6.0 ([CHANGELOG](./CHANGELOG.md)) — core logic is covered by 137 offline unit tests (yt-dlp,
+v0.6.1 ([CHANGELOG](./CHANGELOG.md)) — core logic is covered by 137 offline unit tests (yt-dlp,
 whisper backends, cache, OpenCC, and the Ollama HTTP endpoint are mocked; no network or models
 needed). The full flow has
 been manually verified (2026-07-19: real YouTube download, transcription, cached re-digest,

@@ -4,6 +4,17 @@ All notable changes to this project are documented here. **Every release bumps `
 `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` (kept identical) and adds an
 entry below.**
 
+## [0.6.1] - 2026-08-11
+
+### Changed (docs only — no code changes)
+
+- `SKILL.md` tightened for agent consumption: script-internal narratives (interpreter
+  auto-selection, Apple Podcasts fallback) compressed to "a stderr note explains what happened —
+  relay it" with mechanics deferred to the README; the overloaded `digest_model` table cell
+  split into its own "Digest model resolution" section; the untrusted-content rule now has one
+  named canonical definition (Phase 2) that other sections reference instead of restating.
+- No behavior change intended anywhere — same commands, same rules, same guarantees.
+
 ## [0.6.0] - 2026-08-11
 
 ### Added
