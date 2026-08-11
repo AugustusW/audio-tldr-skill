@@ -370,7 +370,7 @@ python3 -m pytest tests/   # 137 個單元測試，不需網路或模型
 
 ## 狀態
 
-v0.6.0（[CHANGELOG](./CHANGELOG.md)）——核心邏輯有 137 個離線單元測試（yt-dlp、whisper 後端、
+v0.6.1（[CHANGELOG](./CHANGELOG.md)）——核心邏輯有 137 個離線單元測試（yt-dlp、whisper 後端、
 快取、OpenCC、Ollama HTTP 端點皆以 mock 模擬，不需網路或模型）。完整流程於 2026-07-19 人工驗證
 （真實 YouTube 下載、轉錄、快取重摘要、中文轉換、`--keep-audio`、output 資料夾 md/html 摘要、
 逐字稿翻譯、從 `/usr/bin/python3` 的 interpreter 自動切換、Apple Podcasts fallback 端到端——
