@@ -47,11 +47,13 @@
 - ✓ 摘要成品存入 output 資料夾，可選 Markdown 或 HTML——逐字稿留在快取
 - ✓ 對話式詢問：請求沒說要怎麼整理時，agent 用純文字列出樣板選單詢問
 - ✓ 整理樣板：會議記錄／重點摘要／分析報告——也可把自己的格式存成樣板重用
+- ✓ 選配全本機摘要：`digest_model: ollama:<model>` 讓第二階段改走你自己的 Ollama server——逐字稿文字也不離開電腦
 - ✓ 摘要層翻譯：任何語言輸出摘要，或忠實全文翻譯
 - ✓ 選配習慣設定檔——不設也能用，零門檻
 - ✓ interpreter 自動選擇：backend 裝在別的 Python（如 homebrew）會自動找到並切換；`--doctor` 一鍵診斷環境
 - ✓ 內建 Apple Podcasts fallback：yt-dlp extractor 失敗時自動走 iTunes lookup API——快取識別維持你貼的原始連結；貼節目頁連結（無單集 id）自動抓最新一集
 - ✓ 影片來源可選抽幀：scene detection 投影片截圖、或指定時間戳畫面——影片以 ≤720p 抓取、抽完即刪；幀圖與逐字稿共用同一快取 entry
+- ✓ 字幕匯出：`--format srt` / `--format vtt` 產出含時間戳的標準字幕檔，與逐字稿並存，四個後端皆支援
 - ✓ 手動 copy、Claude Code plugin、或裝進 Codex（開放 SKILL.md 標準）三種安裝方式
 
 ## 安裝
@@ -164,6 +166,19 @@ Copy-Item -Recurse -Force "audio-tldr-skill\skills\audio-tldr" $skillsDir
   [faster-whisper README](https://github.com/SYSTRAN/faster-whisper#gpu)。
 - mlx-whisper 僅限 Apple Silicon；whisper.cpp 在 Windows 需要 PATH 上有 `whisper-cli.exe`
   並設 `AUDIO_TLDR_WHISPER_CPP_MODEL`。
+- **Smart App Control 可能擋下 `yt-dlp.exe`**——官方預建執行檔未簽章，Smart App Control 會靜默
+  拒絕執行（不會跳提示，`yt-dlp` 就是完全不動；Event Viewer 可看到該檔案的 CodeIntegrity
+  事件 3077）。解法：改用 venv 內已簽章的 `python.exe` 呼叫，在 PATH 上放一個 `yt-dlp.cmd`：
+  ```bat
+  @echo off
+  "%~dp0python.exe" -m yt_dlp %*
+  ```
+  這個 `.cmd` 檔**必須是 CRLF 換行**（Windows batch 解析對這點很敏感；用 Unix 工具存成 LF
+  會靜默失敗）。預設存 LF 的編輯器（或 `git config core.autocrlf` 設成 `input`）要記得另外存
+  成 CRLF。
+- **PowerShell 裡逗號列表要加引號**——`frames.py --at 90,215,10:05` 沒加引號會被 PowerShell
+  拆成三個獨立參數，Python 根本收不到完整字串（引號內逗號才不會被特殊處理）。一律加引號：
+  `--at "90,215,10:05"`。
 
 ## 用法
 
@@ -195,6 +210,25 @@ Copy-Item -Recurse -Force "audio-tldr-skill\skills\audio-tldr" $skillsDir
 與 `manifest.json` 跟逐字稿共用同一快取 entry，重複請求秒回。純邏輯有自動化測試；真實
 影片抽幀每版人工驗證。
 
+### 字幕（SRT/VTT）
+
+```
+> 幫我轉錄這個，順便給我字幕檔：https://youtu.be/xxxx
+> ~/Videos/keynote.mp4 產一個 srt
+```
+
+```bash
+python3 scripts/transcribe.py --format srt "<來源>"   # transcript.srt，標準 SRT
+python3 scripts/transcribe.py --format vtt "<來源>"   # transcript.vtt，標準 WebVTT
+```
+
+`--format` 預設 `txt`（不變）。`srt`/`vtt` 會在 `transcript.txt` 之外另外產出含逐段時間戳
+的字幕檔——純文字逐字稿不受影響。四個 whisper 後端都支援。segment 資料只快取一份，之後要求
+另一種字幕格式（先跑過 `srt` 再要 `vtt`，或反過來）直接吃快取重新排版——秒回，不重轉錄。
+若快取項目建立於此功能之前（或上次是用 `--format txt` 轉錄），沒有 segment 資料可用來產字幕：
+腳本會清楚回報並附上解法（`--force --format srt` 或 `vtt` 重新轉錄取得時間戳），不會悄悄猜測
+或降級處理請求。
+
 ## 運作原理
 
 刻意拆成兩段：
@@ -215,7 +249,9 @@ Copy-Item -Recurse -Force "audio-tldr-skill\skills\audio-tldr" $skillsDir
   合理位置：yt-dlp 會連來源網站下載 URL 內容、whisper 後端初次使用可能自模型庫下載模型（依賴套件的
   行為由各該專案自理）。
 - **Digest 階段會把逐字稿文字（絕不是音訊）送進模型**——在你自己的 Claude session 內，跟請 Claude
-  讀任何本機檔案完全一樣。
+  讀任何本機檔案完全一樣。**例外：** 設定 `digest_model: ollama:<model>` 後改走你自己的本機
+  Ollama server——逐字稿文字同樣不離開電腦，換來全流程本機化（代價是本機小模型的摘要品質較低）。
+  詳見[整理樣板](#整理樣板)。
 - **快取逐字稿是未加密純文字、預設永久保存**，位於 `~/.cache/audio-tldr/`。處理敏感內容後請 `--clear`
   該筆，或預先設定 retention。
 - **摘要成品長存於 output 資料夾**（預設 `./audio-tldr-output/`，相對於工作目錄）——包含全文翻譯
@@ -253,7 +289,7 @@ model: large-v3
 | `auto_delete_audio` | `on` | 轉錄完刪除下載音檔；`off` 則 mp3 留在快取資料夾 |
 | `output_format` | `md` | 摘要檔格式 `md` 或 `html`；當次對話指定優先於此欄 |
 | `model` | `large-v3-turbo` | 轉錄用的 whisper 模型（以 `--model` 傳入）；當次對話指定優先於此欄 |
-| `digest_model` | （平台預設） | 摘要 subagent 用的模型——未設＝平台預設（Claude Code：`sonnet`；Codex：`GPT-5.6 Terra`）；填模型名＝指定；`off`＝不派 subagent、當前 agent 直接摘要（通常較耗額度） |
+| `digest_model` | （平台預設） | 摘要用的模型——未設＝平台預設 subagent（Claude Code：`sonnet`；Codex：`GPT-5.6 Terra`）；填模型名＝指定 subagent 模型；`ollama:<model>`（例：`ollama:llama3.2`）＝改走你自己的本機 Ollama server，見下方；`off`＝不派 subagent、當前 agent 直接摘要（通常較耗額度） |
 
 此檔由 agent 讀取（Claude Code 與 Codex 共用）——安裝時不會要求設定，檔案不存在時一律走預設。
 
@@ -279,6 +315,16 @@ model: large-v3
 **省額度摘要：**支援 subagent 的平台上，摘要預設交給較便宜的模型（Claude Code：`sonnet`；
 Codex：`GPT-5.6 Terra`）——用 `digest_model` 偏好指定模型或關閉（`off`＝當前 agent 直接摘要）。
 
+**全本機摘要（Ollama）：**設定 `digest_model: ollama:<model>`（例：`ollama:llama3.2`）後，
+第二階段改由 `scripts/digest.py` 呼叫你自己的本機 [Ollama](https://ollama.com) server，
+不再派任何 agent subagent——逐字稿文字也不離開電腦，在原本就本機化的轉錄管線之上再進一步。
+需要先裝好 Ollama、`ollama serve` 已啟動、模型已 pull（`ollama pull <model>`）——跟 whisper
+後端一樣是使用者自己的責任，不會自動安裝或下載任何東西。伺服器位址預設
+`http://localhost:11434`；Ollama 跑在區網其他機器時用 `AUDIO_TLDR_OLLAMA_HOST` 覆蓋。
+連不上 server 或模型沒 pull 時，agent 會回報明確錯誤並停下——絕不悄悄退回 agent-session
+摘要，那樣會違背選這個模式的本意。代價：本機小模型的摘要品質通常低於 subagent 路徑
+（sonnet / GPT 等級模型）。
+
 ## 快取與設定
 
 快取**預設永久保留**——除非你主動設定，否則絕不自動刪除。
@@ -294,6 +340,7 @@ Codex：`GPT-5.6 Terra`）——用 `digest_model` 偏好指定模型或關閉�
 | `--force` | 忽略快取強制重轉錄 |
 | `--keep-audio` | 下載的 mp3 留在快取資料夾（預設轉錄完刪除） |
 | `--doctor` | JSON 環境診斷：Python 路徑/版本、backend 與工具可見性、其他有 backend 的 interpreter、MLX Metal 可用性 |
+| `--format txt\|srt\|vtt` | 輸出格式（預設 `txt`，不變）；`srt`/`vtt` 會另外產出含時間戳的字幕檔——見[字幕](#字幕srtvtt) |
 
 環境變數：
 
@@ -303,13 +350,14 @@ Codex：`GPT-5.6 Terra`）——用 `digest_model` 偏好指定模型或關閉�
 | `AUDIO_TLDR_WHISPER_CPP_MODEL` | ggml 模型檔路徑（啟用 whisper.cpp 後端） |
 | `AUDIO_TLDR_ZH_CONVERT` | 中文轉換：`off`，或任何 OpenCC 設定（預設 `s2twp`——台灣繁體含慣用語） |
 | `AUDIO_TLDR_PYTHON` | 指定執行的 Python interpreter（優先於自動探測）。whisper backend 裝在非預設 Python（如 homebrew 3.12）時適用 |
+| `AUDIO_TLDR_OLLAMA_HOST` | `digest_model: ollama:<model>` 用的 Ollama server 位址（預設 `http://localhost:11434`）；Ollama 跑在區網其他機器時設定 |
 
 ## 開發
 
 ```bash
 git clone https://github.com/AugustusW/audio-tldr-skill.git
 cd audio-tldr-skill
-python3 -m pytest tests/   # 93 個單元測試，不需網路或模型
+python3 -m pytest tests/   # 137 個單元測試，不需網路或模型
 ```
 
 版本規則：每次釋出必同步 bump `.claude-plugin/plugin.json` 與 `.claude-plugin/marketplace.json`
@@ -322,8 +370,8 @@ python3 -m pytest tests/   # 93 個單元測試，不需網路或模型
 
 ## 狀態
 
-v0.4.0（[CHANGELOG](./CHANGELOG.md)）——核心邏輯有 63 個離線單元測試（yt-dlp、whisper 後端、
-快取、OpenCC 皆以 mock 模擬，不需網路或模型）。完整流程於 2026-07-19 人工驗證
+v0.6.0（[CHANGELOG](./CHANGELOG.md)）——核心邏輯有 137 個離線單元測試（yt-dlp、whisper 後端、
+快取、OpenCC、Ollama HTTP 端點皆以 mock 模擬，不需網路或模型）。完整流程於 2026-07-19 人工驗證
 （真實 YouTube 下載、轉錄、快取重摘要、中文轉換、`--keep-audio`、output 資料夾 md/html 摘要、
 逐字稿翻譯、從 `/usr/bin/python3` 的 interpreter 自動切換、Apple Podcasts fallback 端到端——
 真實 53 分鐘節目經 iTunes lookup 解析、轉錄、原 Apple URL 二訪命中快取），環境如下：
@@ -340,7 +388,10 @@ v0.4.0（[CHANGELOG](./CHANGELOG.md)）——核心邏輯有 63 個離線單元�
 Codex 支援依開放 SKILL.md 標準；轉錄核心已於 2026-07-19 在 Codex 端完成端到端驗證
 （真實 53 分鐘 podcast 下載、轉錄、快取命中，含 interpreter 自動切換路徑）。
 摘要層功能（output 資料夾、翻譯、preferences）目前僅在 Claude Code 端驗證過。
-可能的下一步：SRT 字幕匯出、講者分離。歡迎開 issue 與 PR。
+SRT/VTT 字幕匯出（v0.6.0）的四後端 segment 擷取與排版邏輯皆有單元測試覆蓋；真實轉錄產出字幕的
+端到端流程尚未在每個後端人工驗證過。Ollama 全本機摘要模式（v0.6.0）的單元測試覆蓋 mock HTTP
+端點（request 格式、response 解析、server 連不上、模型未 pull 等錯誤）；尚未對真實 Ollama server
+人工驗證過。可能的下一步：講者分離。歡迎開 issue 與 PR。
 
 ## 授權
 
