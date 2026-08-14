@@ -4,6 +4,15 @@ All notable changes to this project are documented here. **Every release bumps `
 `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` (kept identical) and adds an
 entry below.**
 
+## [0.6.2] - 2026-08-14
+
+### Added
+
+- **`processing_seconds` in transcription output and `meta.json`** — wall-clock time of the
+  backend transcription call itself (download and cache steps excluded). Divide `duration`
+  by `processing_seconds` to get the backend's realtime factor. Cached entries created by
+  earlier versions do not have this field; cache hits return whatever the original run stored.
+
 ## [0.6.1] - 2026-08-11
 
 ### Changed (docs only — no code changes)

@@ -850,8 +850,12 @@ def main(argv=None):
                       file=sys.stderr)
                 audio_path, dl_title = download_audio(media_url, Path(tmpdir))
                 title = ep_title or dl_title
+        t_backend = time.monotonic()
         text, duration, lang, segments = _run_backend(
             backend, audio_path, args.language, args.model, want_segments=want_segments)
+        # Wall-clock of the transcription call only (download/NAS-style side steps
+        # excluded), so duration / processing_seconds gives the backend's realtime factor.
+        processing_seconds = round(time.monotonic() - t_backend, 2)
         if args.keep_audio and tmpdir:
             # Audio retention is an optional side-effect: its failure must never
             # discard the (potentially expensive) transcription that already succeeded.
@@ -892,6 +896,7 @@ def main(argv=None):
     model_used = (os.environ.get("AUDIO_TLDR_WHISPER_CPP_MODEL", "")
                   if backend == "whisper-cpp" else resolve_model(backend, args.model))
     meta = {"transcript_path": str(t_path), "title": title, "duration": duration,
+            "processing_seconds": processing_seconds,
             "language": lang, "backend": backend, "model": model_used,
             "source": args.source}
     if media_url:
