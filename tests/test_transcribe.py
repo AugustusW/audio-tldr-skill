@@ -957,3 +957,25 @@ def test_cache_hit_reuses_existing_subtitle_file_without_rewriting(monkeypatch, 
     assert rc == 0
     assert srt_path.read_text() == "SENTINEL-ALREADY-WRITTEN"  # not clobbered
     assert out["srt_path"] == str(srt_path)
+
+
+def test_main_fresh_transcription_records_processing_seconds(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    audio = tmp_path / "talk.mp3"
+    audio.write_bytes(b"a")
+    monkeypatch.setattr(transcribe, "detect_backend", lambda: "mlx-whisper")
+    monkeypatch.setattr(transcribe, "resolve_model", lambda backend, model: "stub-model")
+    monkeypatch.setattr(
+        transcribe, "_run_backend",
+        lambda backend, path, language, model, want_segments=False: ("hello", 3.0, "en", None))
+    rc = transcribe.main([str(audio)])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0 and out["cache_hit"] is False
+    assert isinstance(out["processing_seconds"], float) and out["processing_seconds"] >= 0
+    key = transcribe.cache_key(str(audio))
+    meta = json.loads((tmp_path / "audio-tldr" / key / "meta.json").read_text())
+    assert meta["processing_seconds"] == out["processing_seconds"]
+    t = meta["timings"]
+    assert t["backend_call"] == meta["processing_seconds"]
+    assert t["download"] is None  # local file: nothing was downloaded
+    assert t["postprocess"] >= 0 and t["write"] >= 0

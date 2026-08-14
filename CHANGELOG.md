@@ -4,6 +4,19 @@ All notable changes to this project are documented here. **Every release bumps `
 `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` (kept identical) and adds an
 entry below.**
 
+## [0.6.2] - 2026-08-14
+
+### Added
+
+- **`processing_seconds` and a `timings` stage breakdown in transcription output and
+  `meta.json`** — `processing_seconds` is the wall-clock of the backend transcription call
+  (divide `duration` by it for the realtime factor). `timings` splits the run into
+  `download` (URL sources; null for local files), `backend_call` (== `processing_seconds`),
+  `postprocess` (repetition collapse + Traditional-Chinese conversion) and `write`
+  (cache-file writes, incl. subtitle formatting). Model-load time is not split out — it is
+  part of `backend_call` and varies by backend. Entries cached by earlier versions lack
+  both fields; cache hits return whatever the original run stored.
+
 ## [0.6.1] - 2026-08-11
 
 ### Changed (docs only — no code changes)
