@@ -975,3 +975,7 @@ def test_main_fresh_transcription_records_processing_seconds(monkeypatch, tmp_pa
     key = transcribe.cache_key(str(audio))
     meta = json.loads((tmp_path / "audio-tldr" / key / "meta.json").read_text())
     assert meta["processing_seconds"] == out["processing_seconds"]
+    t = meta["timings"]
+    assert t["backend_call"] == meta["processing_seconds"]
+    assert t["download"] is None  # local file: nothing was downloaded
+    assert t["postprocess"] >= 0 and t["write"] >= 0

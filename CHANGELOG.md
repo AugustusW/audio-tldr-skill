@@ -8,10 +8,14 @@ entry below.**
 
 ### Added
 
-- **`processing_seconds` in transcription output and `meta.json`** — wall-clock time of the
-  backend transcription call itself (download and cache steps excluded). Divide `duration`
-  by `processing_seconds` to get the backend's realtime factor. Cached entries created by
-  earlier versions do not have this field; cache hits return whatever the original run stored.
+- **`processing_seconds` and a `timings` stage breakdown in transcription output and
+  `meta.json`** — `processing_seconds` is the wall-clock of the backend transcription call
+  (divide `duration` by it for the realtime factor). `timings` splits the run into
+  `download` (URL sources; null for local files), `backend_call` (== `processing_seconds`),
+  `postprocess` (repetition collapse + Traditional-Chinese conversion) and `write`
+  (cache-file writes, incl. subtitle formatting). Model-load time is not split out — it is
+  part of `backend_call` and varies by backend. Entries cached by earlier versions lack
+  both fields; cache hits return whatever the original run stored.
 
 ## [0.6.1] - 2026-08-11
 

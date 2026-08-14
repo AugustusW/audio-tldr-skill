@@ -835,6 +835,7 @@ def main(argv=None):
     tmpdir = None
     kept_audio = None
     media_url = None
+    dl_t0 = time.monotonic()
     try:
         if is_url(args.source):
             tmpdir = tempfile.mkdtemp(prefix="audio-tldr-dl-")
@@ -850,6 +851,8 @@ def main(argv=None):
                       file=sys.stderr)
                 audio_path, dl_title = download_audio(media_url, Path(tmpdir))
                 title = ep_title or dl_title
+        # Download wall-clock (URL sources only; includes the Apple-fallback retry).
+        download_seconds = round(time.monotonic() - dl_t0, 2) if tmpdir else None
         t_backend = time.monotonic()
         text, duration, lang, segments = _run_backend(
             backend, audio_path, args.language, args.model, want_segments=want_segments)
@@ -883,6 +886,7 @@ def main(argv=None):
         if tmpdir:
             shutil.rmtree(tmpdir, ignore_errors=True)
 
+    post_t0 = time.monotonic()
     deduped = _collapse_repetitions(text)
     if deduped != text:
         print(f"note: collapsed repeated phrases ({len(text) - len(deduped)} chars removed — "
@@ -890,9 +894,12 @@ def main(argv=None):
               file=sys.stderr)
         text = deduped
     text = _maybe_to_traditional(text, lang)
+    postprocess_seconds = round(time.monotonic() - post_t0, 2)
+    w_t0 = time.monotonic()
     d.mkdir(parents=True, exist_ok=True)
     t_path = d / "transcript.txt"
     t_path.write_text(text)
+    write_acc = time.monotonic() - w_t0
     model_used = (os.environ.get("AUDIO_TLDR_WHISPER_CPP_MODEL", "")
                   if backend == "whisper-cpp" else resolve_model(backend, args.model))
     meta = {"transcript_path": str(t_path), "title": title, "duration": duration,
@@ -913,12 +920,14 @@ def main(argv=None):
         if segments:
             # Cache the raw (pre-OpenCC) segments once — a later request for the
             # *other* subtitle format reformats from this instead of re-transcribing.
+            w_t1 = time.monotonic()
             seg_path = d / "segments.json"
             seg_path.write_text(json.dumps(segments, ensure_ascii=False))
             zh_segments = [{**s, "text": _maybe_to_traditional(s["text"], lang)} for s in segments]
             content = format_srt(zh_segments) if args.format == "srt" else format_vtt(zh_segments)
             sub_path = d / f"transcript.{args.format}"
             sub_path.write_text(content)
+            write_acc += time.monotonic() - w_t1
             meta["segments_path"] = str(seg_path)
             meta[f"{args.format}_path"] = str(sub_path)
         else:
@@ -928,6 +937,15 @@ def main(argv=None):
                 "(switch to a backend with segment support, e.g. mlx-whisper or "
                 "faster-whisper, and re-run with --force)")
 
+    # Stage breakdown (seconds). backend_call == processing_seconds (kept for
+    # backward compatibility); write covers cache-file writes incl. subtitle
+    # formatting; unmeasurable stages are null (e.g. download for local files).
+    meta["timings"] = {
+        "download": download_seconds,
+        "backend_call": processing_seconds,
+        "postprocess": postprocess_seconds,
+        "write": round(write_acc, 2),
+    }
     (d / "meta.json").write_text(json.dumps(meta, ensure_ascii=False))
     if sub_error:
         print(sub_error, file=sys.stderr)
