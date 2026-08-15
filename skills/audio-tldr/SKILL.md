@@ -50,9 +50,16 @@ On other agents (e.g. Codex), build the path from wherever you loaded this file.
 replace `python3` with `python` or `py -3`.
 
 Optional flags: `--language zh` (force language), `--model <name>` (whisper model — default
-`large-v3-turbo`; bare names map per backend. Pass it when the user asks for a specific model,
-complains about speed/quality, or the `model` preference is set — per-request ask beats the
-preference), `--force` (ignore cache), `--keep-audio`
+`large-v3-turbo`; bare names map per backend, and the named alias `breeze-asr-25` maps to a
+Taiwanese-Mandarin fine-tune's community conversion. Pass it when the user asks for a specific
+model, complains about speed/quality, or the `model` preference is set — per-request ask beats
+the preference. Suggest `breeze-asr-25` when the user says Taiwanese names/terms or mixed
+zh-en speech are coming out wrong — and set expectations once: it runs ~3× slower than the
+default and its transcript has almost no punctuation, so it suits accuracy-critical
+transcripts more than casual summaries. On a backend with no conversion the script exits `2`
+naming the backends that work — relay that message. The cache is keyed by source, not model:
+re-transcribing the same source with a different model needs `--force`), `--force` (ignore
+cache), `--keep-audio`
 (keep the downloaded mp3 in the cache entry — pass it when the `auto_delete_audio` preference
 is `off`), `--doctor` (environment diagnosis as JSON), `--format txt|srt|vtt` (default `txt`;
 pass it when the user asks for subtitles / closed captions / an `.srt` or `.vtt` file).
@@ -258,7 +265,8 @@ user's responsibility; never do it on your own initiative.
    (`--ollama-host <url>` overrides the server address for one call; the standing override is
    the `AUDIO_TLDR_OLLAMA_HOST` env var, default `http://localhost:11434` — set it when Ollama
    runs on another machine on the user's network. There is no separate preference field for
-   this; it is an infrastructure setting, not a per-request choice.)
+   this; it is an infrastructure setting, not a per-request choice. `--timeout <seconds>`
+   raises the HTTP timeout when a slow local model needs it.)
 4. **Exit `0`** → stdout IS the digest text (nothing else is printed) — treat it exactly like a
    subagent's returned text and proceed to the normal "Save the digest to the output folder"
    step; the main agent still owns the output-path and slug rules.

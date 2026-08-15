@@ -118,7 +118,8 @@ URL 來源請確認你有權下載與處理該內容，並遵守來源網站條�
 
 各後端預設一律 `large-v3-turbo`（whisper.cpp 除外——模型由 `AUDIO_TLDR_WHISPER_CPP_MODEL` 檔案決定）。
 純 CPU 環境偏慢時可降到 `small`。單次覆蓋用 `--model`，長期覆蓋用 `AUDIO_TLDR_MODEL`（flag 優先）。
-短名會依後端自動映射（mlx 自動補 `mlx-community/whisper-` 前綴；完整 HF repo 路徑原樣使用）：
+短名會依後端自動映射（mlx 自動補 `mlx-community/whisper-` 前綴；完整 HF repo 路徑原樣使用；
+具名別名對應到該後端的社群轉換版——見下方說明）：
 
 | 情境 | 建議模型 |
 |---|---|
@@ -126,11 +127,27 @@ URL 來源請確認你有權下載與處理該內容，並遵守來源網站條�
 | 一般中文摘要 | `medium` |
 | 重視人名、專有名詞、精確度 | `large-v3` |
 | 顯卡夠力、要速度與品質 | `large-v3` 或 `large-v3-turbo` |
+| 台灣華語人名/術語、中英夾雜 | `breeze-asr-25`（見下方說明） |
 
 ```powershell
 python3 scripts/transcribe.py --model small "<來源>"   # 單次
 $env:AUDIO_TLDR_MODEL = "large-v3"    # 長期；PowerShell（bash/zsh 用 export AUDIO_TLDR_MODEL=large-v3）
 ```
+
+快取以來源為鍵、不含模型——已快取的來源要換模型重新轉錄時，請加 `--force`。
+
+**台灣華語（`breeze-asr-25`）**：[聯發創新基地 Breeze-ASR-25](https://huggingface.co/MediaTek-Research/Breeze-ASR-25)
+是針對台灣華語與中英夾雜情境微調的 Whisper-large-v2 模型（Apache 2.0）。此別名依後端對應到社群轉換版——
+mlx-whisper：[`eoleedi/Breeze-ASR-25-mlx`](https://huggingface.co/eoleedi/Breeze-ASR-25-mlx)、
+faster-whisper：[`SoybeanMilk/faster-whisper-Breeze-ASR-25`](https://huggingface.co/SoybeanMilk/faster-whisper-Breeze-ASR-25)
+（首次使用需下載約 3 GB）。openai-whisper 沒有轉換版——腳本會明確回報而不是亂猜。
+whisper.cpp 使用者可將 `AUDIO_TLDR_WHISPER_CPP_MODEL` 指向 Hugging Face 上的社群 GGML 轉換版。
+
+取捨（來自我們對一集 52 分鐘台灣華語財經 podcast 的單次 A/B 實測，Apple M4 Pro、mlx-whisper
+後端——單集實測，非完整 benchmark）：Breeze-ASR-25 在台灣人名、財經術語、中英夾雜段落明顯較準，
+但速度比 `large-v3-turbo` 慢約 3 倍（約 5x 即時 vs 約 15x，骨幹是較大的 large-v2）、輸出幾乎
+沒有標點，且英文單字一律小寫。預設維持 `large-v3-turbo`；當「台灣華語的人名與術語不能錯」比速度
+和標點更重要時，再選 `breeze-asr-25`。
 
 **選配——繁體中文**：whisper 對中文常輸出簡體。`pip install opencc` 之後，中文逐字稿自動轉台灣繁體——含慣用語在地化（`s2twp`，例：軟件→軟體）——並以 prompt
 引導模型優先用繁體詞彙；沒裝就維持原樣。
@@ -204,7 +221,7 @@ Copy-Item -Recurse -Force "audio-tldr-skill\skills\audio-tldr" $skillsDir
 ```
 
 請求提到截圖／投影片時會跑 `scripts/frames.py`：ffmpeg scene detection 抓畫面明顯變化
-的幀（`--threshold`、`--min-gap`、`--max-frames`），或用 `--at 90,12:05` 指定時間戳抽幀
+的幀（`--threshold`、`--min-gap`、`--max-frames`，JPEG 品質用 `--quality`），或用 `--at 90,12:05` 指定時間戳抽幀
 （例如幫摘要的時間軸配圖）。預設不啟用——單純摘要請求永遠不會下載影片。網址來源以
 ≤720p 抓影片、抽完幀立即刪除（`--keep-video` 保留）；本機檔案原地使用、永不修改。幀圖
 與 `manifest.json` 跟逐字稿共用同一快取 entry，重複請求秒回。純邏輯有自動化測試；真實
@@ -333,6 +350,8 @@ Codex：`GPT-5.6 Terra`）——用 `digest_model` 偏好指定模型或關閉�
 
 | 指令 | 作用 |
 |---|---|
+| `--language <代碼>` | 強制指定轉錄語言（例：`zh`）；預設自動偵測 |
+| `--model <名稱>` | 本次使用的 whisper 模型——見[模型選擇](#模型選擇) |
 | `--cache-info` | 列出快取逐字稿 + 大小（JSON） |
 | `--clear "<來源>"` | 清除單筆 |
 | `--clear-all --yes` | 全部清除 |
@@ -350,7 +369,7 @@ Codex：`GPT-5.6 Terra`）——用 `digest_model` 偏好指定模型或關閉�
 | `AUDIO_TLDR_WHISPER_CPP_MODEL` | ggml 模型檔路徑（啟用 whisper.cpp 後端） |
 | `AUDIO_TLDR_ZH_CONVERT` | 中文轉換：`off`，或任何 OpenCC 設定（預設 `s2twp`——台灣繁體含慣用語） |
 | `AUDIO_TLDR_PYTHON` | 指定執行的 Python interpreter（優先於自動探測）。whisper backend 裝在非預設 Python（如 homebrew 3.12）時適用 |
-| `AUDIO_TLDR_OLLAMA_HOST` | `digest_model: ollama:<model>` 用的 Ollama server 位址（預設 `http://localhost:11434`）；Ollama 跑在區網其他機器時設定 |
+| `AUDIO_TLDR_OLLAMA_HOST` | `digest_model: ollama:<model>` 用的 Ollama server 位址（預設 `http://localhost:11434`）；Ollama 跑在區網其他機器時設定。單次覆蓋用 `digest.py --ollama-host` |
 
 ## 開發
 

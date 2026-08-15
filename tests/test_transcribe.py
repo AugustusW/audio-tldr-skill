@@ -2,6 +2,8 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
 SCRIPT = Path(__file__).parent.parent / "skills" / "audio-tldr" / "scripts" / "transcribe.py"
 spec = importlib.util.spec_from_file_location("transcribe", SCRIPT)
 transcribe = importlib.util.module_from_spec(spec)
@@ -609,6 +611,54 @@ def test_resolve_model_cli_beats_env(monkeypatch):
     monkeypatch.setenv("AUDIO_TLDR_MODEL", "medium")
     assert transcribe.resolve_model("faster-whisper", "large-v3") == "large-v3"
     assert transcribe.resolve_model("faster-whisper", None) == "medium"
+
+
+# ── Model aliases (v0.7.0) ──────────────────────────────────────────
+
+def test_resolve_model_breeze_alias_maps_per_backend(monkeypatch):
+    monkeypatch.delenv("AUDIO_TLDR_MODEL", raising=False)
+    assert transcribe.resolve_model("mlx-whisper", "breeze-asr-25") == \
+        "eoleedi/Breeze-ASR-25-mlx"
+    assert transcribe.resolve_model("faster-whisper", "breeze-asr-25") == \
+        "SoybeanMilk/faster-whisper-Breeze-ASR-25"
+
+
+def test_resolve_model_breeze_alias_case_insensitive(monkeypatch):
+    monkeypatch.delenv("AUDIO_TLDR_MODEL", raising=False)
+    assert transcribe.resolve_model("mlx-whisper", "Breeze-ASR-25") == \
+        "eoleedi/Breeze-ASR-25-mlx"
+
+
+def test_resolve_model_breeze_alias_unsupported_backend_raises(monkeypatch):
+    monkeypatch.delenv("AUDIO_TLDR_MODEL", raising=False)
+    with pytest.raises(transcribe.ModelAliasError) as e:
+        transcribe.resolve_model("openai-whisper", "breeze-asr-25")
+    msg = str(e.value)
+    assert "openai-whisper" in msg
+    assert "mlx-whisper" in msg and "faster-whisper" in msg  # names the backends that DO work
+
+
+def test_resolve_model_breeze_alias_via_env(monkeypatch):
+    monkeypatch.setenv("AUDIO_TLDR_MODEL", "breeze-asr-25")
+    assert transcribe.resolve_model("faster-whisper", None) == \
+        "SoybeanMilk/faster-whisper-Breeze-ASR-25"
+
+
+def test_main_unsupported_alias_fails_before_download(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.delenv("AUDIO_TLDR_MODEL", raising=False)
+    monkeypatch.setattr(transcribe, "detect_backend", lambda: "openai-whisper")
+
+    def _no_download(*a, **kw):
+        raise AssertionError("download must not run when the alias cannot resolve")
+    monkeypatch.setattr(transcribe, "download_audio", _no_download)
+    monkeypatch.setattr(transcribe, "_resolve_show_to_latest", lambda s: (s, None))
+    rc = transcribe.main(["https://example.com/ep.mp3", "--model", "breeze-asr-25"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    # The alias error itself, not a swallowed AssertionError from the download stub.
+    assert "no known openai-whisper conversion" in err
+    assert "download must not run" not in err
 
 
 # ── OpenCC default config (v0.3.3) ──────────────────────────────────

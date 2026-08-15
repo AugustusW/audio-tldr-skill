@@ -572,15 +572,45 @@ def format_vtt(segments) -> str:
 
 DEFAULT_MODEL = "large-v3-turbo"
 
+# Community fine-tune aliases: one bare name fans out to the right per-backend
+# conversion repo (the upstream releases are HF-transformers-format only, which
+# none of our backends load directly). None = no known conversion for that
+# backend. whisper-cpp is absent on purpose — it never consults resolve_model
+# (its model is the AUDIO_TLDR_WHISPER_CPP_MODEL GGML file; community GGML
+# conversions of these models exist on Hugging Face).
+MODEL_ALIASES = {
+    "breeze-asr-25": {
+        "mlx-whisper": "eoleedi/Breeze-ASR-25-mlx",
+        "faster-whisper": "SoybeanMilk/faster-whisper-Breeze-ASR-25",
+        "openai-whisper": None,
+    },
+}
+
+
+class ModelAliasError(Exception):
+    """A model alias was requested on a backend with no known conversion."""
+
 
 def resolve_model(backend: str, cli_model):
     """Pick the whisper model: --model > AUDIO_TLDR_MODEL env > large-v3-turbo.
     Accepts canonical names (large-v3-turbo), whisper-prefixed names
-    (whisper-large-v3-turbo), or a full HF repo path (kept as-is). mlx needs a
-    repo path, so bare names get the mlx-community/whisper- prefix; the other
-    backends take canonical names directly. whisper-cpp ignores this entirely
-    (its model is the AUDIO_TLDR_WHISPER_CPP_MODEL file)."""
+    (whisper-large-v3-turbo), a known alias from MODEL_ALIASES
+    (case-insensitive, e.g. breeze-asr-25), or a full HF repo path (kept
+    as-is). mlx needs a repo path, so bare names get the mlx-community/whisper-
+    prefix; the other backends take canonical names directly. whisper-cpp
+    ignores this entirely (its model is the AUDIO_TLDR_WHISPER_CPP_MODEL file).
+    Raises ModelAliasError when an alias has no conversion for `backend`."""
     name = cli_model or os.environ.get("AUDIO_TLDR_MODEL") or DEFAULT_MODEL
+    alias = MODEL_ALIASES.get(name.lower())
+    if alias is not None:
+        repo = alias.get(backend)
+        if repo is None:
+            supported = ", ".join(k for k, v in alias.items() if v)
+            raise ModelAliasError(
+                f"model '{name}' has no known {backend} conversion; "
+                f"it is available on: {supported}. Install one of those backends, "
+                f"or pass a full HF repo path you trust instead")
+        return repo
     if "/" in name:
         return name
     if name.startswith("whisper-"):
@@ -756,7 +786,9 @@ def main(argv=None):
     ap.add_argument("--model", default=None,
                     help="whisper model (default: large-v3-turbo; also via AUDIO_TLDR_MODEL). "
                          "Bare names map per backend (mlx gets the mlx-community/ prefix); "
-                         "a full HF repo path is used as-is. Ignored by whisper-cpp")
+                         "a full HF repo path is used as-is; named aliases map to the "
+                         "backend's community conversion (breeze-asr-25 — Taiwanese "
+                         "Mandarin fine-tune). Ignored by whisper-cpp")
     ap.add_argument("--force", action="store_true", help="ignore cache, re-transcribe")
     ap.add_argument("--cache-info", action="store_true", help="list cached transcripts (JSON)")
     ap.add_argument("--clear", metavar="SOURCE", help="delete the cache entry for one source")
@@ -829,6 +861,15 @@ def main(argv=None):
         print("tip: run --doctor to see which interpreters/tools were probed",
               file=sys.stderr)
         return 3
+
+    # Validate the model choice now, before spending minutes on a download that
+    # a bad alias/backend combination would only throw away.
+    if backend != "whisper-cpp":
+        try:
+            resolve_model(backend, args.model)
+        except ModelAliasError as e:
+            print(str(e), file=sys.stderr)
+            return 2
 
     title = Path(args.source).stem
     audio_path = args.source

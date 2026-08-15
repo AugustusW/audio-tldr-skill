@@ -125,7 +125,8 @@ The default is `large-v3-turbo` on every backend (whisper.cpp excepted — its m
 `AUDIO_TLDR_WHISPER_CPP_MODEL` file). On CPU-only machines this favors quality over speed —
 drop to `small` if transcription is too slow. Override per run with `--model`, or persistently
 with `AUDIO_TLDR_MODEL` (the flag wins). Bare names are mapped per backend (mlx gets the
-`mlx-community/whisper-` prefix automatically; a full HF repo path is used as-is):
+`mlx-community/whisper-` prefix automatically; a full HF repo path is used as-is; named
+aliases map to the backend's community conversion — see below):
 
 | Situation | Suggested model |
 |---|---|
@@ -133,11 +134,32 @@ with `AUDIO_TLDR_MODEL` (the flag wins). Bare names are mapped per backend (mlx 
 | General Chinese summaries | `medium` |
 | Names, jargon, accuracy-critical | `large-v3` |
 | Capable GPU, speed + quality | `large-v3` or `large-v3-turbo` |
+| Taiwanese Mandarin names/terms, zh-en code-switching | `breeze-asr-25` (see below) |
 
 ```powershell
 python3 scripts/transcribe.py --model small "<source>"   # per run
 $env:AUDIO_TLDR_MODEL = "large-v3"    # persistent; PowerShell (bash/zsh: export AUDIO_TLDR_MODEL=large-v3)
 ```
+
+The cache is keyed by source, not model — to re-transcribe an already-cached source with a
+different model, add `--force`.
+
+**Taiwanese Mandarin (`breeze-asr-25`):** [MediaTek Breeze-ASR-25](https://huggingface.co/MediaTek-Research/Breeze-ASR-25)
+is a Whisper-large-v2 fine-tune optimized for Taiwanese Mandarin and Mandarin-English
+code-switching (Apache 2.0). The alias resolves to a community conversion per backend —
+mlx-whisper: [`eoleedi/Breeze-ASR-25-mlx`](https://huggingface.co/eoleedi/Breeze-ASR-25-mlx),
+faster-whisper: [`SoybeanMilk/faster-whisper-Breeze-ASR-25`](https://huggingface.co/SoybeanMilk/faster-whisper-Breeze-ASR-25)
+(~3 GB download on first use). There is no openai-whisper conversion — the script reports
+that instead of guessing. whisper.cpp users can point `AUDIO_TLDR_WHISPER_CPP_MODEL` at one
+of the community GGML conversions on Hugging Face.
+
+Trade-offs, from one A/B run we did on a 52-minute Taiwanese-Mandarin finance podcast
+(Apple M4 Pro, mlx-whisper backend, single episode — not a benchmark suite): Breeze-ASR-25
+was noticeably better on Taiwanese names, finance terms, and mixed zh/en passages, but ran
+about 3× slower than `large-v3-turbo` (≈5× realtime vs ≈15×, its backbone is the bigger
+large-v2), produced almost no punctuation, and emitted English words in lowercase. The
+default stays `large-v3-turbo`; reach for `breeze-asr-25` when getting Taiwanese-Mandarin
+names and terminology right matters more than speed and punctuation.
 
 **Optional — Traditional Chinese:** whisper often emits Simplified Chinese. `pip install opencc`
 and Chinese transcripts are converted to Taiwan Traditional automatically — including
@@ -220,7 +242,8 @@ cached transcript — instant, no re-transcription.
 ```
 
 Asking for screenshots / slides runs `scripts/frames.py`: ffmpeg scene detection captures
-frames where the picture visibly changes (`--threshold`, `--min-gap`, `--max-frames`), or
+frames where the picture visibly changes (`--threshold`, `--min-gap`, `--max-frames`,
+JPEG quality via `--quality`), or
 `--at 90,12:05` extracts stills at exact timestamps (e.g. to illustrate a digest timeline).
 Off by default — plain summarize requests never download video. For URLs the video is
 fetched at ≤720p and deleted right after extraction (`--keep-video` keeps it); local files
@@ -371,6 +394,8 @@ Ask Claude, or run `scripts/transcribe.py` directly:
 
 | Command | What it does |
 |---|---|
+| `--language <code>` | force the transcription language (e.g. `zh`); default auto-detect |
+| `--model <name>` | whisper model for this run — see [Choosing a model](#choosing-a-model) |
 | `--cache-info` | list cached transcripts + sizes (JSON) |
 | `--clear "<source>"` | delete one entry |
 | `--clear-all --yes` | delete everything |
@@ -388,7 +413,7 @@ Environment variables:
 | `AUDIO_TLDR_WHISPER_CPP_MODEL` | path to a ggml model file (enables the whisper.cpp backend) |
 | `AUDIO_TLDR_ZH_CONVERT` | Chinese conversion: `off`, or an OpenCC config (default `s2twp` — Taiwan Traditional incl. common phrases) |
 | `AUDIO_TLDR_PYTHON` | pin the Python interpreter the script runs under (wins over auto-probing). Useful when your whisper backend lives in a non-default Python (e.g. Homebrew 3.12) |
-| `AUDIO_TLDR_OLLAMA_HOST` | Ollama server base URL used by `digest_model: ollama:<model>` (default `http://localhost:11434`); set when Ollama runs on another machine on your network |
+| `AUDIO_TLDR_OLLAMA_HOST` | Ollama server base URL used by `digest_model: ollama:<model>` (default `http://localhost:11434`); set when Ollama runs on another machine on your network. `digest.py --ollama-host` overrides it for one call |
 
 ## Develop
 

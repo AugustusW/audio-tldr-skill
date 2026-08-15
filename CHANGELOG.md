@@ -4,6 +4,29 @@ All notable changes to this project are documented here. **Every release bumps `
 `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` (kept identical) and adds an
 entry below.**
 
+## [0.7.0] - 2026-08-15
+
+### Added
+
+- **`breeze-asr-25` model alias** — `--model breeze-asr-25` (or `AUDIO_TLDR_MODEL`,
+  case-insensitive) selects MediaTek's Breeze-ASR-25, a Whisper-large-v2 fine-tune for
+  Taiwanese Mandarin and Mandarin-English code-switching, resolving to the right community
+  conversion per backend: `eoleedi/Breeze-ASR-25-mlx` (mlx-whisper),
+  `SoybeanMilk/faster-whisper-Breeze-ASR-25` (faster-whisper). openai-whisper has no known
+  conversion — the script exits `2` before downloading anything, naming the backends that
+  work. whisper.cpp is unaffected (its model stays the `AUDIO_TLDR_WHISPER_CPP_MODEL` file;
+  community GGML conversions exist). The default model is unchanged (`large-v3-turbo`).
+  README documents the measured trade-offs from a single-episode A/B run (better Taiwanese
+  names/terms, ~3× slower, almost no punctuation, lowercase English).
+
+### Fixed (docs drift — no behavior change)
+
+- README (EN + zh-TW) flag reference caught up with the code: added the missing
+  `--language` and `--model` rows to the transcribe flag table, `--quality` to the frames
+  flag list, and the `digest.py --ollama-host` per-call override note; SKILL.md now
+  documents `digest.py --timeout`. Also documented that the cache is keyed by source, not
+  model — switching models on a cached source needs `--force`.
+
 ## [0.6.2] - 2026-08-14
 
 ### Added
