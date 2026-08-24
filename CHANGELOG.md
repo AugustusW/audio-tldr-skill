@@ -4,6 +4,23 @@ All notable changes to this project are documented here. **Every release bumps `
 `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` (kept identical) and adds an
 entry below.**
 
+## [0.7.1] - 2026-08-24
+
+### Fixed
+
+- **A timestamp past the end of the video no longer discards the whole batch.** `frames.py
+  --at` handed every requested timestamp to ffmpeg and aborted with exit `2` the moment one
+  of them failed, so a single out-of-range value cost every frame that had already been
+  extracted — the caller received no manifest at all. Measured against ffmpeg 8.1: a seek at
+  or past the end exits non-zero and writes no file.
+
+  Two changes. The duration is now probed *before* extraction and timestamps at or past the
+  end are dropped up front, named on stderr (`note: skipping ... at or past the 3.0s end of
+  the video: 10`). A timestamp that still fails is skipped with a `warn:` line instead of
+  ending the run. If ffprobe cannot report a duration nothing is filtered — the fallback is
+  to try, not to refuse. If *every* extraction fails the exit code is still `2`, so a broken
+  ffmpeg or an unreadable video does not masquerade as an empty result.
+
 ## [0.7.0] - 2026-08-15
 
 ### Added

@@ -254,20 +254,48 @@ def main(argv=None, run=subprocess.run) -> int:
         # manifest are no longer referenced — drop them or they orphan
         for stale in fdir.glob("*.jpg"):
             stale.unlink()
+    # Probe before extracting rather than after: a timestamp at or past the end
+    # makes ffmpeg seek beyond the last frame and produce nothing. Asking for it
+    # at all is the mistake, so drop those up front and name them. No duration
+    # (ffprobe unavailable or unparseable) means no filtering — fall back to
+    # trying every timestamp, not to refusing them.
+    duration = _probe_duration(video, run)
+    if duration is not None:
+        past_end = [t for t in times if t >= duration]
+        if past_end:
+            print(f"note: skipping {len(past_end)} timestamp(s) at or past the "
+                  f"{duration:.1f}s end of the video: "
+                  + ", ".join(f"{t:g}" for t in past_end), file=sys.stderr)
+            times = [t for t in times if t < duration]
+
     entries = list(existing)
+    failed = []
     for ts in times:
         i = len(entries) + 1
         out_path = fdir / frame_filename(i, ts)
         r = run(build_extract_cmd(video, ts, out_path, a.quality),
                 capture_output=True, text=True)
-        if r.returncode != 0:
-            print("error: ffmpeg frame extraction failed\n"
+        # Require the file, not just the exit code. A past-end seek was measured
+        # to exit non-zero and write nothing, but the two signals are independent
+        # and only the file is what the caller ends up using.
+        wrote = out_path.exists() and out_path.stat().st_size > 0
+        if r.returncode != 0 or not wrote:
+            out_path.unlink(missing_ok=True)
+            failed.append(ts)
+            print(f"warn: no frame at {ts:g}s — skipping it\n"
                   + (r.stderr or "")[-2000:], file=sys.stderr)
-            return 2
+            continue
         entries.append({"i": i, "ts": ts, "file": out_path.name})
-    entries.sort(key=lambda e: e["ts"])
 
-    duration = _probe_duration(video, run)
+    # One unusable timestamp must not cost the whole batch. But if nothing came
+    # out at all, the problem is ffmpeg or the video itself and the caller needs
+    # a non-zero exit rather than an empty manifest that looks like a result.
+    if failed and not entries:
+        print("error: every frame extraction failed — is ffmpeg installed and "
+              "the video readable?", file=sys.stderr)
+        return 2
+
+    entries.sort(key=lambda e: e["ts"])
     manifest = build_manifest(mode, threshold, a.min_gap, source, entries,
                               duration=duration)
     mani_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=1))
