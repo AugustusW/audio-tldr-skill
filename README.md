@@ -420,7 +420,7 @@ Environment variables:
 ```bash
 git clone https://github.com/AugustusW/audio-tldr-skill.git
 cd audio-tldr-skill
-python3 -m pytest tests/   # 137 unit tests, no network or model needed
+python3 -m pytest tests/   # 149 unit tests, no network or model needed
 ```
 
 Versioning: every release bumps `version` in `.claude-plugin/plugin.json` **and**
@@ -434,12 +434,12 @@ Your preferences, custom templates (`~/.config/audio-tldr/`), and cache
 
 ## Status
 
-v0.6.1 ([CHANGELOG](./CHANGELOG.md)) — core logic is covered by 137 offline unit tests (yt-dlp,
-whisper backends, cache, OpenCC, and the Ollama HTTP endpoint are mocked; no network or models
-needed). The full flow has
-been manually verified (2026-07-19: real YouTube download, transcription, cached re-digest,
-Chinese conversion, `--keep-audio`, output-folder digests in md/html, transcript translation,
-interpreter auto-selection from `/usr/bin/python3`, and the Apple Podcasts fallback end-to-end —
+v0.7.1 ([CHANGELOG](./CHANGELOG.md)) — core logic is covered by 149 offline unit tests (yt-dlp,
+whisper backends, cache, OpenCC, ffmpeg/ffprobe frame extraction, and the Ollama HTTP endpoint
+are mocked; no network or models needed). The full flow has been manually verified (2026-07-19:
+real YouTube download, transcription, cached re-digest, Chinese conversion, `--keep-audio`,
+output-folder digests in md/html, transcript translation, interpreter auto-selection from
+`/usr/bin/python3`, and the Apple Podcasts fallback end-to-end —
 a real 53-min episode resolved via iTunes lookup, transcribed, and cache-hit on the original
 Apple URL) on:
 
@@ -461,8 +461,10 @@ tests on all four backends' segment-capture and formatting logic; end-to-end sub
 from a real transcription has not yet been manually verified on every backend. The Ollama local
 digest mode (v0.6.0) is covered by unit tests against a mocked HTTP endpoint (request shape,
 response parsing, unreachable-server and model-missing errors); it has not yet been manually
-verified against a real Ollama server. Possible next: speaker diarization. Issues and PRs
-welcome.
+verified against a real Ollama server. Frame extraction (v0.5.0) is covered by unit tests that
+stub ffmpeg and ffprobe rather than invoking them; the past-end-timestamp behavior fixed in
+v0.7.1 was measured against ffmpeg 8.1, and other versions may exit differently. Possible next:
+speaker diarization. Issues and PRs welcome.
 
 ## License
 

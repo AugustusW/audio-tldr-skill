@@ -376,7 +376,7 @@ Codex：`GPT-5.6 Terra`）——用 `digest_model` 偏好指定模型或關閉�
 ```bash
 git clone https://github.com/AugustusW/audio-tldr-skill.git
 cd audio-tldr-skill
-python3 -m pytest tests/   # 137 個單元測試，不需網路或模型
+python3 -m pytest tests/   # 149 個單元測試，不需網路或模型
 ```
 
 版本規則：每次釋出必同步 bump `.claude-plugin/plugin.json` 與 `.claude-plugin/marketplace.json`
@@ -389,8 +389,9 @@ python3 -m pytest tests/   # 137 個單元測試，不需網路或模型
 
 ## 狀態
 
-v0.6.1（[CHANGELOG](./CHANGELOG.md)）——核心邏輯有 137 個離線單元測試（yt-dlp、whisper 後端、
-快取、OpenCC、Ollama HTTP 端點皆以 mock 模擬，不需網路或模型）。完整流程於 2026-07-19 人工驗證
+v0.7.1（[CHANGELOG](./CHANGELOG.md)）——核心邏輯有 149 個離線單元測試（yt-dlp、whisper 後端、
+快取、OpenCC、ffmpeg/ffprobe 影格擷取、Ollama HTTP 端點皆以 mock 模擬，不需網路或模型）。
+完整流程於 2026-07-19 人工驗證
 （真實 YouTube 下載、轉錄、快取重摘要、中文轉換、`--keep-audio`、output 資料夾 md/html 摘要、
 逐字稿翻譯、從 `/usr/bin/python3` 的 interpreter 自動切換、Apple Podcasts fallback 端到端——
 真實 53 分鐘節目經 iTunes lookup 解析、轉錄、原 Apple URL 二訪命中快取），環境如下：
@@ -410,7 +411,9 @@ Codex 支援依開放 SKILL.md 標準；轉錄核心已於 2026-07-19 在 Codex 
 SRT/VTT 字幕匯出（v0.6.0）的四後端 segment 擷取與排版邏輯皆有單元測試覆蓋；真實轉錄產出字幕的
 端到端流程尚未在每個後端人工驗證過。Ollama 全本機摘要模式（v0.6.0）的單元測試覆蓋 mock HTTP
 端點（request 格式、response 解析、server 連不上、模型未 pull 等錯誤）；尚未對真實 Ollama server
-人工驗證過。可能的下一步：講者分離。歡迎開 issue 與 PR。
+人工驗證過。影格擷取（v0.5.0）的單元測試以 stub 取代真實的 ffmpeg 與 ffprobe 呼叫；v0.7.1 修正的
+「時間戳超出片尾」行為是對 ffmpeg 8.1 實測的結果，其他版本的結束碼可能不同。
+可能的下一步：講者分離。歡迎開 issue 與 PR。
 
 ## 授權
 
