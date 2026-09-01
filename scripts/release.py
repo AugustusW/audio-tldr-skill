@@ -108,13 +108,26 @@ def changelog_section(text, version):
 
 
 def stated_status_version(text):
-    match = STATUS_VERSION_RE.search(text)
-    return match.group(1) if match else None
+    """The Status version, requiring it to be stated exactly once. Two lines
+    matching the pattern mean a stale duplicate that first-wins reading and
+    count=1 writing would both keep alive forever (the same false green as
+    sepia issue #39, confirmed empirically against this repository)."""
+    matches = STATUS_VERSION_RE.findall(text)
+    if len(matches) > 1:
+        raise ValueError(
+            f"{len(matches)} Status version lines found; a stale duplicate "
+            "survives first-wins updates, keep exactly one"
+        )
+    return matches[0][0] if matches else None
 
 
 def set_status_version(text, version):
-    if not STATUS_VERSION_RE.search(text):
-        raise ValueError("no 'vX.Y.Z ([CHANGELOG]...)' in the Status section")
+    matches = STATUS_VERSION_RE.findall(text)
+    if len(matches) != 1:
+        raise ValueError(
+            "expected exactly one 'vX.Y.Z ([CHANGELOG]...)' Status line, "
+            f"found {len(matches)}"
+        )
     return STATUS_VERSION_RE.sub(lambda m: "v" + version + m.group(2), text, count=1)
 
 

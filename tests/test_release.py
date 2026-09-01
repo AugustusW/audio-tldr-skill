@@ -116,6 +116,17 @@ class TestReadmeStatusVersion:
         assert "v0.5.0" in out
         assert "v0.7.1" in out
 
+    def test_duplicate_status_lines_are_an_error_not_first_wins(self):
+        # A stale leftover Status line after the real one: first-wins reading
+        # stayed green on the first and count=1 writing never touched the
+        # second, so the stale line lived forever (sepia issue #39 shape,
+        # reproduced against this repo before fixing).
+        text = README_EN + "\nv0.6.0 ([CHANGELOG](./CHANGELOG.md)) stale leftover\n"
+        with pytest.raises(ValueError):
+            release.stated_status_version(text)
+        with pytest.raises(ValueError):
+            release.set_status_version(text, "0.7.4")
+
     def test_refuses_a_readme_with_no_status_version(self):
         with pytest.raises(ValueError):
             release.set_status_version("## Status\n\nNo version here.\n", "0.7.4")
