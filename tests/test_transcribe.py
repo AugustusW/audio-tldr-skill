@@ -104,6 +104,66 @@ def test_zh_conversion_applied_only_for_zh(monkeypatch):
     assert transcribe._maybe_to_traditional("", "zh") == ""
 
 
+def test_zh_gate_leaves_traditional_text_untouched(monkeypatch):
+    """Already-Traditional text must survive untouched, ambiguous chars included.
+
+    干 / 里 / 吃 are valid Traditional characters that are also the Simplified form
+    of 乾 / 裏 / 喫. An unconditional converter pass rewrites them, which is how a
+    street address (瑞屏里) turned into a direction word (瑞屏裡) in production.
+    """
+    pytest.importorskip("opencc")
+    import opencc
+
+    monkeypatch.setattr(transcribe, "_get_zh_converter", lambda: opencc.OpenCC("s2twp"))
+    for text in (
+        "招牌豆干滷到入味",
+        "楠梓瑞屏里就有得吃",
+        "這份文件很重要，屬於哪一類型",
+        "他在群組裡分享了床墊照片",
+    ):
+        assert transcribe._maybe_to_traditional(text, "zh") == text
+
+
+def test_zh_gate_still_converts_simplified(monkeypatch):
+    """The guard must not cost the feature it guards: Simplified input still converts,
+    phrase layer included."""
+    pytest.importorskip("opencc")
+    import opencc
+
+    monkeypatch.setattr(transcribe, "_get_zh_converter", lambda: opencc.OpenCC("s2twp"))
+    assert transcribe._maybe_to_traditional("这家卤味店", "zh") == "這家滷味店"
+    assert transcribe._maybe_to_traditional("软件工程师", "zh") == "軟體工程師"
+
+
+def test_zh_gate_is_per_segment(monkeypatch):
+    """Drift is partial: convert the segment that went Simplified, leave the rest."""
+    pytest.importorskip("opencc")
+    import opencc
+
+    monkeypatch.setattr(transcribe, "_get_zh_converter", lambda: opencc.OpenCC("s2twp"))
+    assert (transcribe._maybe_to_traditional("招牌豆干滷到入味。\n这个软件很好用", "zh")
+            == "招牌豆干滷到入味。\n這個軟體很好用")
+
+
+def test_zh_ambiguous_table_is_embedded_not_read_from_package(monkeypatch):
+    """The table ships in the source: the official opencc binding has binary .ocd2
+    dictionaries, so reading STCharacters.txt is not portable."""
+    assert isinstance(transcribe._ZH_AMBIGUOUS, frozenset)
+    for ch in "干里吃":
+        assert ch in transcribe._ZH_AMBIGUOUS
+    for ch in "这卤类软":
+        assert ch not in transcribe._ZH_AMBIGUOUS
+
+
+def test_zh_gate_survives_a_broken_converter(monkeypatch):
+    class Boom:
+        def convert(self, text):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(transcribe, "_get_zh_converter", lambda: Boom())
+    assert transcribe._maybe_to_traditional("这家店", "zh") == "这家店"
+
+
 def test_zh_converter_env_off(monkeypatch):
     monkeypatch.setattr(transcribe, "_OPENCC", None)  # reset lazy cache
     monkeypatch.setenv("AUDIO_TLDR_ZH_CONVERT", "off")

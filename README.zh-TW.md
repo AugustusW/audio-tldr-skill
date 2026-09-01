@@ -152,6 +152,10 @@ whisper.cpp 使用者可將 `AUDIO_TLDR_WHISPER_CPP_MODEL` 指向 Hugging Face �
 **選配——繁體中文**：whisper 對中文常輸出簡體。`pip install opencc` 之後，中文逐字稿自動轉台灣繁體——含慣用語在地化（`s2twp`，例：軟件→軟體）——並以 prompt
 引導模型優先用繁體詞彙；沒裝就維持原樣。
 
+轉換是逐段進行，而且只套用在真的含有簡體字的段落。本來就是繁體的段落原樣通過，
+所以兩邊都合法的字（干、里、吃）與慣用語表會改寫的詞（「文件」作 document 解）
+都會保留講者原本的用字。
+
 ### Windows 注意事項
 
 Windows 由底層 Python 生態支援並提供 PowerShell 安裝方式；**完整流程尚未在 Windows 上驗證**，
