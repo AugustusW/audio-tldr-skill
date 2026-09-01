@@ -380,13 +380,19 @@ Codex：`GPT-5.6 Terra`）——用 `digest_model` 偏好指定模型或關閉�
 ```bash
 git clone https://github.com/AugustusW/audio-tldr-skill.git
 cd audio-tldr-skill
-python3 -m pytest tests/   # 160 個單元測試，不需網路或模型
+python3 -m pytest tests/   # 188 個單元測試，不需網路或模型
 ```
 
-版本規則：每次釋出必同步 bump `.claude-plugin/plugin.json` 與 `.claude-plugin/marketplace.json`
-的 `version`（兩者保持一致）、在 [CHANGELOG](./CHANGELOG.md) 加一筆，並打 git tag 發
-[GitHub Release](https://github.com/AugustusW/audio-tldr-skill/releases)。
-這件事由 `tests/test_docs.py` 守著：兩份 README 的 Status 版號、兩份 README 寫的測試數、
+版本規則：先在 [CHANGELOG](./CHANGELOG.md) 寫好新版本那一筆，然後跑
+
+```bash
+python3 scripts/release.py 0.7.4      # 加 --dry-run 只報告會做什麼，不寫入任何東西
+```
+
+它會 bump `.claude-plugin/plugin.json` 與 `.claude-plugin/marketplace.json` 的 `version`、改寫兩份
+README 的版號與測試數、全套測試沒過就拒絕繼續，通過了才 commit、打 tag、push，並以該筆 CHANGELOG
+內容當說明發出 [GitHub Release](https://github.com/AugustusW/audio-tldr-skill/releases)。
+`tests/test_docs.py` 守的是留在 repo 裡的那一半：兩份 README 的 Status 版號、兩份 README 寫的測試數、
 marketplace 版號、CHANGELOG 最新一筆，只要有一項跟 `plugin.json` 對不上，測試就會紅。
 **想收到更新通知**：Watch 本 repo（Custom → Releases）；用 Claude Code plugin 安裝的話，
 跑 `/plugin` 從 marketplace 更新（它比對上述 version）。手動複製安裝沒有自動更新——
@@ -395,7 +401,7 @@ marketplace 版號、CHANGELOG 最新一筆，只要有一項跟 `plugin.json` �
 
 ## 狀態
 
-v0.7.3（[CHANGELOG](./CHANGELOG.md)）——核心邏輯有 160 個離線單元測試（yt-dlp、whisper 後端、
+v0.7.3（[CHANGELOG](./CHANGELOG.md)）——核心邏輯有 188 個離線單元測試（yt-dlp、whisper 後端、
 快取、OpenCC、ffmpeg/ffprobe 影格擷取、Ollama HTTP 端點皆以 mock 模擬，不需網路或模型）。
 完整流程於 2026-07-19 人工驗證
 （真實 YouTube 下載、轉錄、快取重摘要、中文轉換、`--keep-audio`、output 資料夾 md/html 摘要、

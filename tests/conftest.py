@@ -6,6 +6,13 @@ _honor_explicit_python 與 _maybe_reexec 兩條 execv 路徑都以 AUDIO_TLDR_RE
 為 loop guard，這裡設一次全部擋掉；要測 re-exec 行為的測試自行 monkeypatch.delenv。
 """
 import os
+import sys
+from pathlib import Path
+
+# The docs tests import scripts/release.py, which owns the definitions they
+# check against. conftest runs before any test module, so one insertion here
+# serves all of them.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 os.environ["AUDIO_TLDR_REEXECED"] = "1"
 os.environ.pop("AUDIO_TLDR_PYTHON", None)
