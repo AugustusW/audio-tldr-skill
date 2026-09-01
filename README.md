@@ -426,15 +426,22 @@ Environment variables:
 ```bash
 git clone https://github.com/AugustusW/audio-tldr-skill.git
 cd audio-tldr-skill
-python3 -m pytest tests/   # 160 unit tests, no network or model needed
+python3 -m pytest tests/   # 188 unit tests, no network or model needed
 ```
 
-Versioning: every release bumps `version` in `.claude-plugin/plugin.json` **and**
-`.claude-plugin/marketplace.json` (kept identical), adds a [CHANGELOG](./CHANGELOG.md) entry,
-and is published as a git tag + [GitHub Release](https://github.com/AugustusW/audio-tldr-skill/releases).
-`tests/test_docs.py` enforces that: the suite fails if either README's Status version, either
-README's stated test count, the marketplace version, or the newest CHANGELOG entry falls out
-of step with `plugin.json`.
+Versioning: write the [CHANGELOG](./CHANGELOG.md) entry for the new version, then run
+
+```bash
+python3 scripts/release.py 0.7.4      # --dry-run reports what it would do, and writes nothing
+```
+
+It bumps `version` in `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`, rewrites
+the version and the test count in both READMEs, refuses to go on unless the full suite passes, and
+only then commits, tags, pushes, and publishes the
+[GitHub Release](https://github.com/AugustusW/audio-tldr-skill/releases) with that CHANGELOG
+section as its notes. `tests/test_docs.py` guards the half of that which lives in the repository:
+the suite fails if either README's Status version, either README's stated test count, the
+marketplace version, or the newest CHANGELOG entry falls out of step with `plugin.json`.
 **To get update notifications**: Watch this repo (Custom → Releases), or — if you installed as a
 Claude Code plugin — run `/plugin` and update from the marketplace (it compares the version above).
 Manual-copy installs have no auto-update: re-copy the skill folder after a new release.
@@ -443,7 +450,7 @@ Your preferences, custom templates (`~/.config/audio-tldr/`), and cache
 
 ## Status
 
-v0.7.3 ([CHANGELOG](./CHANGELOG.md)) — core logic is covered by 160 offline unit tests (yt-dlp,
+v0.7.3 ([CHANGELOG](./CHANGELOG.md)) — core logic is covered by 188 offline unit tests (yt-dlp,
 whisper backends, cache, OpenCC, ffmpeg/ffprobe frame extraction, and the Ollama HTTP endpoint
 are mocked; no network or models needed). The full flow has been manually verified (2026-07-19:
 real YouTube download, transcription, cached re-digest, Chinese conversion, `--keep-audio`,
