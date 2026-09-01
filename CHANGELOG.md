@@ -4,6 +4,34 @@ All notable changes to this project are documented here. **Every release bumps `
 `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` (kept identical) and adds an
 entry below.**
 
+## [0.7.3] - 2026-09-01
+
+### Fixed
+
+- **The Status sections were a release behind, again.** Both READMEs claimed v0.7.1 and 149
+  unit tests while `plugin.json` was on 0.7.2 and the suite collected 154. The identical
+  drift was corrected in v0.7.1 by adding the README numbers to the release checklist, and
+  the very next release missed them anyway. That is the useful part of the failure: the
+  checklist was already right, and being right was not enough, because nothing turns red
+  when a documented step is skipped. The Status section is the one place that states what
+  has actually been verified, so a stale version number there costs more credibility than
+  it does anywhere else on the page.
+
+### Added
+
+- **`tests/test_docs.py` turns the release checklist into a failing test.** Six assertions,
+  all reading the repository rather than a hardcoded expectation: `marketplace.json` carries
+  the same version as `plugin.json`; the newest `## [x.y.z]` entry in CHANGELOG.md matches it
+  too; each README's Status version matches it; and every test count stated in each README
+  matches what pytest actually collects.
+
+  The count comes from `pytest --collect-only` in a subprocess against the whole `tests/`
+  directory, so it is the same number whether the full suite or this one file was requested,
+  and `--collect-only` executes nothing, so it cannot recurse. The Status version is matched
+  through its CHANGELOG link rather than by searching for a version string, which keeps the
+  historical mentions in the same section ("Frame extraction (v0.5.0)", "fixed in v0.7.1")
+  out of the match, since those must not be updated on release.
+
 ## [0.7.2] - 2026-09-01
 
 ### Fixed
