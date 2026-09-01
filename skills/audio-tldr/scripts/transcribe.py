@@ -494,8 +494,41 @@ def _collapse_repetitions(text: str) -> str:
 # incl. common-phrase localization, e.g. 軟件->軟體).
 # Set AUDIO_TLDR_ZH_CONVERT=off to disable, or to any OpenCC config (s2t, s2twp, t2s, ...).
 # No opencc installed -> transcripts are left untouched.
+#
+# The conversion is gated per segment (v0.7.2). Simplified-to-Traditional converters
+# assume their input IS Simplified. 干 / 里 / 吃 are perfectly valid Traditional
+# characters that also happen to be the Simplified form of 乾 / 裏 / 喫, so an
+# unconditional pass rewrites transcripts that were already Traditional. Measured on
+# 22 real transcripts (337k chars, all already Traditional): a second s2twp pass
+# changed 625 places, 175 of them 文件 -> 檔案. In that corpus 文件 always meant
+# "document" (ISO audits, design specs), never "computer file" — the phrase table is
+# right for Simplified input and wrong here.
+#
+# Gate: a character is evidence of Simplified input only if the converter changes it
+# AND it is not in _ZH_AMBIGUOUS. Segments with no evidence are left untouched.
+# Splitting per segment matters because the drift this guard exists for is partial:
+# the tail of a long transcript goes Simplified while the head stayed Traditional.
 _ZH_PROMPT = "以下是用繁體中文記錄的對話內容。"
 _OPENCC = None  # lazy: None=untried, False=unavailable/disabled
+
+# Valid Traditional characters that are ALSO the Simplified form of some other
+# Traditional character. Derived from OpenCC's STCharacters.txt: entries whose
+# Traditional candidate list contains the character itself. Embedded rather than read
+# from the installed package because only opencc-python-reimplemented ships plain-text
+# dictionaries; the official binding ships binary .ocd2. Regenerate with:
+#   grep -P '^(.)\t.*\1' <opencc>/dictionary/STCharacters.txt | cut -f1 | tr -d '\n'
+_ZH_AMBIGUOUS = frozenset(
+    "㐹万丑丰了于云亘仆仇价仿伙余佛佣俊修借僵克党冬准凌几凶出划刮制千升卜占卷厂厘"
+    "只台叶吁吃合吊同后向周咨咸咽哄唇喂噪回困夫夸奸姜娘它家尸局岩岳巨布帘席干幸广"
+    "庵弦彩征御志念恤愈愿戚才扎托扣折抵拐挂挨挽据搜斗旋昆暗曲朱朴杆杠杯杰松板极柜"
+    "栗核梁欲沈沾泛注涂涌淀游漓熏玩璇症皂矩确私秋种筑系胄背胜胡腊腌膻致舍芸苔苹范"
+    "荐蒙蔑虫蚝蜡蝎表谷跖辟适郁酸采里雕面"
+)
+
+# Newlines and CJK/ASCII punctuation. OpenCC phrase conversion never spans punctuation,
+# so splitting here costs nothing and keeps a drifted sentence from dragging its
+# neighbours through the converter.
+_ZH_SEGMENT_RE = re.compile(r"([\n。！？；，、：｜!?;,:|]+)")
 
 
 def _get_zh_converter():
@@ -513,9 +546,37 @@ def _get_zh_converter():
     return _OPENCC or None
 
 
+def _zh_has_simplified(text, conv):
+    """True if `text` holds a character that is evidence of Simplified input.
+
+    Only depends on conv.convert(), so any object with that method works (tests
+    pass a stub). Ambiguous characters are skipped: they are valid Traditional on
+    their own and say nothing about the rest of the segment.
+    """
+    for ch in set(text):
+        if ch in _ZH_AMBIGUOUS:
+            continue
+        try:
+            if conv.convert(ch) != ch:
+                return True
+        except Exception:
+            return False
+    return False
+
+
 def _maybe_to_traditional(text, language):
     conv = _get_zh_converter() if (language or "").lower().startswith("zh") else None
-    return conv.convert(text) if conv and text else text
+    if not conv or not text:
+        return text
+    try:
+        parts = _ZH_SEGMENT_RE.split(text)  # even index = content, odd = separator
+        return "".join(
+            conv.convert(part)
+            if i % 2 == 0 and _zh_has_simplified(part, conv) else part
+            for i, part in enumerate(parts)
+        )
+    except Exception:
+        return text
 
 
 # ── Subtitle export (SRT/VTT, v0.6.0) ───────────────────────────────

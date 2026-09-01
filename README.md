@@ -166,6 +166,12 @@ and Chinese transcripts are converted to Taiwan Traditional automatically — in
 common-phrase localization (`s2twp`, e.g. 軟件→軟體) — plus the model is biased toward
 Traditional vocabulary. Not installed → transcripts are left as-is.
 
+The conversion is applied per segment, and only to segments that actually contain
+Simplified characters. A segment already written in Traditional is passed through
+untouched, so words that are valid in both scripts (干, 里, 吃) and phrases the
+localization table would otherwise rewrite (文件 as "document") keep what the speaker
+said.
+
 ### Windows notes
 
 Windows is supported by the underlying Python stack, but the full flow has **not yet been

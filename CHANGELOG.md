@@ -4,6 +4,38 @@ All notable changes to this project are documented here. **Every release bumps `
 `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` (kept identical) and adds an
 entry below.**
 
+## [0.7.2] - 2026-09-01
+
+### Fixed
+
+- **Chinese conversion no longer rewrites transcripts that were already Traditional.**
+  `_maybe_to_traditional` ran OpenCC over every Chinese transcript unconditionally. A
+  Simplified-to-Traditional converter assumes its input is Simplified, but 干, 里 and 吃
+  are valid Traditional characters that also happen to be the Simplified form of 乾, 裏
+  and 喫, so the pass rewrote text that was already correct.
+
+  Measured on 22 real transcripts totalling 337,222 characters, all of them already
+  Traditional (they had been through one conversion pass before being stored): a second
+  `s2twp` pass changed 625 places. 175 of those were 文件 turned into 檔案. Classifying
+  all 177 occurrences of 文件 by surrounding context put 119 in document senses (ISO
+  audits, requirement and design specs) and 0 in computer-file senses, so the phrase
+  table was rewriting the speaker's word every time. `s2tw` changed 4 places in the same
+  corpus; `s2t` additionally turns 吃 into 喫. No config is safe to apply unconditionally.
+
+  The conversion is now gated per segment. A character counts as evidence of Simplified
+  input only if the converter changes it and it is not in `_ZH_AMBIGUOUS`, a 170-character
+  table of forms that are valid in both scripts. Segments with no evidence are passed
+  through untouched. Splitting by newline and punctuation keeps the guard useful for the
+  case it exists for, which is partial drift: whisper going Simplified partway through a
+  long transcript still gets that part converted, without dragging the rest through the
+  converter. On the same corpus the gated pass changes 0 places, and Simplified input
+  still converts, phrase layer included (这家卤味店 to 這家滷味店, 软件工程师 to 軟體工程師).
+
+  The table is embedded in the source rather than read from the installed package,
+  because only `opencc-python-reimplemented` ships plain-text dictionaries while the
+  official binding ships binary `.ocd2`. `AUDIO_TLDR_ZH_CONVERT` is unchanged: the gate
+  decides whether to run the converter, not which config it uses.
+
 ## [0.7.1] - 2026-08-24
 
 ### Fixed
