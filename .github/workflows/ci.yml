@@ -1,0 +1,24 @@
+name: ci
+
+# The suite is offline by design (yt-dlp, whisper backends, ffmpeg and the
+# Ollama endpoint are all mocked), so CI needs pytest and nothing else. This
+# includes tests/test_docs.py, so a release that forgets a README number or a
+# CHANGELOG entry goes red here instead of shipping quietly.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: pip install pytest
+      - run: python3 -m compileall -q skills/audio-tldr/scripts scripts
+      - run: python3 -m pytest tests -q
