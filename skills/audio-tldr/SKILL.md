@@ -197,6 +197,16 @@ Default structure — when the user picks no template and states no needs, read 
 `transcript_path` and apply `templates/key-summary.md` (respecting the same user-override
 rule above).
 
+**Real timestamps (opt-in).** `transcript.txt` carries no times, so any timeline in a digest is
+estimated from where the text sits in the file — which is why the built-in template marks those
+entries with `~`. When the user wants a timeline they can act on (jump to a moment, or pull
+stills), run Phase 1 with `--format srt` and digest the returned `srt_path` instead: the times
+then come from the transcript's own segments. `scripts/digest.py` normalizes a `.srt`/`.vtt`
+into compact `[MM:SS] line` form before the model sees it; on this agent-driven path, read the
+subtitle file and do the same rather than pasting raw cue blocks. Those `[MM:SS]` values are
+exactly the shape `scripts/frames.py --at` accepts, so a timeline digest converts to stills
+with nothing to reformat by hand.
+
 If the transcript is very long (> ~50k words), digest it in sections, then merge.
 
 **Save the digest to the output folder.** After producing a digest (default or custom), write it
@@ -262,7 +272,9 @@ user's responsibility; never do it on your own initiative.
    ```bash
    python3 "${CLAUDE_SKILL_DIR}/scripts/digest.py" "<transcript_path>" --model <model> --instructions-file <path to the instructions file from step 2>
    ```
-   (`--ollama-host <url>` overrides the server address for one call; the standing override is
+   (Pass `srt_path` here instead of `transcript_path` when the digest needs real times —
+   the script parses the cues itself; `--transcript-format txt|srt` overrides the detection
+   if the file is named unusually. `--ollama-host <url>` overrides the server address for one call; the standing override is
    the `AUDIO_TLDR_OLLAMA_HOST` env var, default `http://localhost:11434` — set it when Ollama
    runs on another machine on the user's network. There is no separate preference field for
    this; it is an infrastructure setting, not a per-request choice. `--timeout <seconds>`

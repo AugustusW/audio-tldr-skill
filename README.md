@@ -426,7 +426,7 @@ Environment variables:
 ```bash
 git clone https://github.com/AugustusW/audio-tldr-skill.git
 cd audio-tldr-skill
-python3 -m pytest tests/   # 189 unit tests, no network or model needed
+python3 -m pytest tests/   # 204 unit tests, no network or model needed
 ```
 
 Versioning: write the [CHANGELOG](./CHANGELOG.md) entry for the new version, then run
@@ -450,7 +450,7 @@ Your preferences, custom templates (`~/.config/audio-tldr/`), and cache
 
 ## Status
 
-v0.7.3 ([CHANGELOG](./CHANGELOG.md)) — core logic is covered by 189 offline unit tests (yt-dlp,
+v0.7.3 ([CHANGELOG](./CHANGELOG.md)) — core logic is covered by 204 offline unit tests (yt-dlp,
 whisper backends, cache, OpenCC, ffmpeg/ffprobe frame extraction, and the Ollama HTTP endpoint
 are mocked; no network or models needed). The full flow has been manually verified (2026-07-19:
 real YouTube download, transcription, cached re-digest, Chinese conversion, `--keep-audio`,
