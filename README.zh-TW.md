@@ -401,7 +401,7 @@ marketplace 版號、CHANGELOG 最新一筆，只要有一項跟 `plugin.json` �
 
 ## 狀態
 
-v0.7.3（[CHANGELOG](./CHANGELOG.md)）——核心邏輯有 204 個離線單元測試（yt-dlp、whisper 後端、
+v0.8.0（[CHANGELOG](./CHANGELOG.md)）——核心邏輯有 204 個離線單元測試（yt-dlp、whisper 後端、
 快取、OpenCC、ffmpeg/ffprobe 影格擷取、Ollama HTTP 端點皆以 mock 模擬，不需網路或模型）。
 完整流程於 2026-07-19 人工驗證
 （真實 YouTube 下載、轉錄、快取重摘要、中文轉換、`--keep-audio`、output 資料夾 md/html 摘要、

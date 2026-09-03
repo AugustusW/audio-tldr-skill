@@ -4,6 +4,40 @@ All notable changes to this project are documented here. **Every release bumps `
 `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` (kept identical) and adds an
 entry below.**
 
+## [0.8.0] - 2026-09-04
+
+### Added
+
+- **`scripts/digest.py` accepts a subtitle transcript, so a timeline can carry real times
+  instead of estimated ones.** The pieces were already here and simply never met:
+  `transcribe.py --format srt` writes `transcript.srt`, `frames.py --at` takes `MM:SS`, and
+  the digest read only the timestamp-free `transcript.txt`. A model asked for a timeline had
+  nothing to go on but where text sat in the file, which is what the `~` in `~MM:SS` has
+  always been admitting. Pass a `.srt` or `.vtt` and it is normalized to `[MM:SS] line` form
+  before the model sees it: one unambiguous time per line, and smaller than the source, since
+  sequence numbers, end times and blank lines are dropped (39% on a three-cue sample).
+  Detection is by suffix; `--transcript-format txt|srt` overrides it, and a plain `.txt` is
+  passed through byte-for-byte.
+
+- **`templates/key-summary.md` now distinguishes a quoted time from a guessed one.** When the
+  transcript lines carry times, the timeline quotes them as `[MM:SS]`; without them it keeps
+  the estimated `~MM:SS`. The marker is the point: a reader can tell which kind of number they
+  are looking at, and the model is told never to round or invent a real one.
+
+- **The timestamps a digest emits are the shape `frames.py --at` consumes.** A timeline built
+  from a subtitle converts to stills with nothing to reformat by hand.
+
+### Note
+
+A subtitle file with no parseable cues exits `2` and names the fix rather than digesting it as
+prose. Dropping every timestamp without saying so is exactly the quiet degradation the rest of
+this script already refuses to perform.
+
+Standard library only, in line with the rest of the repo. 15 new offline unit tests (suite:
+204). The parser is exercised against `transcribe.py`'s own `format_srt` output, not only
+against hand-written samples, so a drift in that format would fail the suite rather than
+surface as a silently timestamp-free digest.
+
 ## [0.7.3] - 2026-09-01
 
 ### Fixed
