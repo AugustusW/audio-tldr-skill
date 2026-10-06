@@ -1401,3 +1401,93 @@ def test_fetch_context_apple_unexpected_error_still_tries_ytdlp(monkeypatch):
     monkeypatch.setattr(transcribe.subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(
         cmd, 0, stdout=json.dumps({"channel": "C"}), stderr=""))
     assert transcribe.fetch_context("https://podcasts.apple.com/tw/podcast/x/id1?i=2") == {"channel": "C"}
+
+
+# ── Launching yt-dlp (Windows Smart App Control, v0.9.1) ────────────
+
+def test_ytdlp_command_windows_prefers_the_python_module(monkeypatch):
+    """A signed python.exe running -m yt_dlp is allowed where the unsigned
+    yt-dlp.exe is blocked."""
+    monkeypatch.setattr(transcribe, "_module_available", lambda m: m == "yt_dlp")
+    monkeypatch.setattr(transcribe.shutil, "which", lambda c: r"C:\bin\yt-dlp.exe")
+    assert transcribe.ytdlp_command(windows=True) == [transcribe.sys.executable, "-m", "yt_dlp"]
+
+
+def test_ytdlp_command_elsewhere_prefers_the_executable(monkeypatch):
+    """A Homebrew yt-dlp is usually newer than a stray pip copy; keep using it."""
+    monkeypatch.setattr(transcribe, "_module_available", lambda m: m == "yt_dlp")
+    monkeypatch.setattr(transcribe.shutil, "which", lambda c: "/opt/homebrew/bin/yt-dlp")
+    assert transcribe.ytdlp_command(windows=False) == ["/opt/homebrew/bin/yt-dlp"]
+
+
+def test_ytdlp_command_falls_back_to_the_module(monkeypatch):
+    monkeypatch.setattr(transcribe, "_module_available", lambda m: m == "yt_dlp")
+    monkeypatch.setattr(transcribe.shutil, "which", lambda c: None)
+    assert transcribe.ytdlp_command(windows=False) == [transcribe.sys.executable, "-m", "yt_dlp"]
+
+
+@pytest.mark.parametrize("shim", [r"C:\bin\yt-dlp.cmd", r"C:\bin\yt-dlp.BAT"])
+def test_ytdlp_command_never_runs_a_batch_file(monkeypatch, shim):
+    """A .cmd/.bat runs through cmd.exe, where an & in a URL (…&t=30) splits
+    the command line: a crafted link could run a second command."""
+    monkeypatch.setattr(transcribe, "_module_available", lambda m: False)
+    monkeypatch.setattr(transcribe.shutil, "which", lambda c: shim)
+    assert transcribe.ytdlp_command(windows=True) is None
+
+
+def test_ytdlp_command_resolves_the_full_path(monkeypatch):
+    """The bare name would make CreateProcess look for yt-dlp.exe on its own."""
+    monkeypatch.setattr(transcribe, "_module_available", lambda m: False)
+    monkeypatch.setattr(transcribe.shutil, "which", lambda c: r"C:\Users\u\.local\bin\yt-dlp.exe")
+    assert transcribe.ytdlp_command(windows=True) == [r"C:\Users\u\.local\bin\yt-dlp.exe"]
+
+
+def test_download_audio_runs_the_resolved_launcher(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(transcribe, "ytdlp_command", lambda: ["py", "-m", "yt_dlp"])
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        (tmp_path / "T.mp3").write_bytes(b"a")
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"title": "T"}), stderr="")
+    monkeypatch.setattr(transcribe.subprocess, "run", fake_run)
+    transcribe.download_audio("https://youtu.be/a?x=1&t=30", tmp_path)
+    assert all(c[:3] == ["py", "-m", "yt_dlp"] for c in calls) and len(calls) == 2
+
+
+def test_download_audio_without_ytdlp_names_the_windows_fix(monkeypatch, tmp_path):
+    monkeypatch.setattr(transcribe, "ytdlp_command", lambda: None)
+    with pytest.raises(transcribe.DownloadError) as e:
+        transcribe.download_audio("https://youtu.be/a", tmp_path)
+    assert "pip install yt-dlp" in str(e.value)
+
+
+def test_fetch_context_uses_the_resolved_launcher(monkeypatch):
+    monkeypatch.undo()
+    monkeypatch.setattr(transcribe, "ytdlp_command", lambda: ["py", "-m", "yt_dlp"])
+    seen = []
+    def fake_run(cmd, **kw):
+        seen.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"channel": "C"}), stderr="")
+    monkeypatch.setattr(transcribe.subprocess, "run", fake_run)
+    assert transcribe.fetch_context("https://youtu.be/z") == {"channel": "C"}
+    assert seen[0][:3] == ["py", "-m", "yt_dlp"]
+
+
+def test_doctor_shows_how_ytdlp_will_be_launched(monkeypatch, tmp_path, capsys):
+    """On Windows the question is usually "which yt-dlp is it trying to run?"."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setattr(transcribe, "_candidate_interpreters", lambda: [])
+    monkeypatch.setattr(transcribe, "ytdlp_command", lambda: ["C:\\py.exe", "-m", "yt_dlp"])
+    transcribe.main(["--doctor"])
+    info = json.loads(capsys.readouterr().out)
+    assert info["tools"]["yt_dlp"] is True
+    assert info["tools"]["yt_dlp_launcher"] == ["C:\\py.exe", "-m", "yt_dlp"]
+
+
+def test_doctor_launcher_is_null_without_ytdlp(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setattr(transcribe, "_candidate_interpreters", lambda: [])
+    monkeypatch.setattr(transcribe, "ytdlp_command", lambda: None)
+    transcribe.main(["--doctor"])
+    info = json.loads(capsys.readouterr().out)
+    assert info["tools"]["yt_dlp"] is False and info["tools"]["yt_dlp_launcher"] is None

@@ -181,8 +181,12 @@ said.
 
 ### Windows notes
 
-Windows is supported by the underlying Python stack, but the full flow has **not yet been
-verified on Windows** — reports welcome. Install with PowerShell:
+The full flow has been verified manually on Windows, in Claude Code and Codex, on versions
+before v0.9.0. v0.9.0 itself was checked on 2026-10-06 (Windows 11 Pro, Python 3.12.11,
+faster-whisper 1.2.1 on an RTX 5080): the full test suite, `--doctor`, real English and Chinese
+transcription with Traditional output, a cache hit, and `--format srt`. Name correction passed
+its unit tests there but has **not yet been run end-to-end on Windows** (those transcriptions
+were local files, which have no source details) — reports welcome. Install with PowerShell:
 
 ```powershell
 # prerequisites (winget shown; Chocolatey: choco install ffmpeg yt-dlp)
@@ -216,15 +220,14 @@ prefer the plugin install if you want managed versions.
   plus `AUDIO_TLDR_WHISPER_CPP_MODEL`.
 - **Smart App Control may block `yt-dlp.exe`** — the prebuilt binary is unsigned, and Smart App
   Control silently refuses to run it (Event Viewer shows a CodeIntegrity event 3077 for the
-  file). It does not prompt; `yt-dlp` just never runs. Workaround: point yt-dlp's shim at your
-  venv's signed `python.exe` instead of the unsigned exe — create `yt-dlp.cmd` on PATH:
-  ```bat
-  @echo off
-  "%~dp0python.exe" -m yt_dlp %*
-  ```
-  The `.cmd` file **must have CRLF line endings** (Windows batch parsing is picky about this;
-  saving it as LF-only from a Unix tool can make it fail silently). Editors that default to LF
-  (or `git config core.autocrlf` set to `input`) will need an explicit CRLF save.
+  file). It does not prompt; `yt-dlp` just never runs. Fix: install yt-dlp into the same
+  Python that runs the skill — `py -3 -m pip install yt-dlp`. On Windows the scripts run it as
+  `python -m yt_dlp` whenever the module is installed, and the signed `python.exe` is allowed.
+  A `yt-dlp.cmd` shim is **not** used (before v0.9.1 it was documented here but never actually
+  invoked): batch files run through `cmd.exe`, where an `&` in a URL splits the command line.
+- **YouTube downloads fail with HTTP 403** — recent yt-dlp needs a JavaScript runtime for
+  YouTube. Install [Deno](https://deno.com/), or, if Node.js is already installed, add
+  `--js-runtimes node` to yt-dlp's config file (`%APPDATA%\yt-dlp\config.txt`).
 - **Quote comma lists in PowerShell** — `frames.py --at 90,215,10:05` gets split by PowerShell
   into three separate arguments before Python ever sees it (commas are not special-cased inside
   quotes). Always quote: `--at "90,215,10:05"`.
@@ -449,7 +452,7 @@ Ask Claude, or run `scripts/transcribe.py` directly:
 | `--set-retention <days>` | auto-prune entries older than N days (`off` = keep forever) |
 | `--force` | re-transcribe one source, ignoring cache |
 | `--keep-audio` | keep the downloaded mp3 in the cache entry (default deletes it after transcription) |
-| `--doctor` | JSON environment diagnosis: Python path/version, backend & tool visibility, other interpreters that have a backend, MLX Metal availability |
+| `--doctor` | JSON environment diagnosis: Python path/version, backend & tool visibility (including exactly how yt-dlp will be launched), other interpreters that have a backend, MLX Metal availability |
 | `--format txt\|srt\|vtt` | output format (default `txt`, unchanged); `srt`/`vtt` also write a subtitle file with segment timestamps — see [Subtitles](#subtitles-srtvtt) |
 
 Environment variables:
@@ -468,7 +471,7 @@ Environment variables:
 ```bash
 git clone https://github.com/AugustusW/audio-tldr-skill.git
 cd audio-tldr-skill
-python3 -m pytest tests/   # 259 unit tests, no network or model needed
+python3 -m pytest tests/   # 272 unit tests, no network or model needed
 ```
 
 Versioning: write the [CHANGELOG](./CHANGELOG.md) entry for the new version, then run
@@ -492,7 +495,7 @@ Your preferences, custom templates (`~/.config/audio-tldr/`), and cache
 
 ## Status
 
-v0.9.0 ([CHANGELOG](./CHANGELOG.md)) — core logic is covered by 259 offline unit tests (yt-dlp,
+v0.9.1 ([CHANGELOG](./CHANGELOG.md)) — core logic is covered by 272 offline unit tests (yt-dlp,
 whisper backends, cache, OpenCC, ffmpeg/ffprobe frame extraction, and the Ollama HTTP endpoint
 are mocked; no network or models needed). The full flow has been manually verified (2026-07-19:
 real YouTube download, transcription, cached re-digest, Chinese conversion, `--keep-audio`,
@@ -510,7 +513,8 @@ Apple URL) on:
 | yt-dlp | 2026.06.09 |
 
 Newer dependency versions may behave differently. Not yet covered by automated tests: real
-downloads, the other three backends, and Windows. Codex support follows the open SKILL.md
+downloads, the other three backends, and Windows (verified manually there; see
+[Windows notes](#windows-notes)). Codex support follows the open SKILL.md
 standard; the transcription core was verified end-to-end inside Codex on 2026-07-19 (a real
 53-min podcast downloaded, transcribed, and cache-hit, including the interpreter
 auto-selection path). Digest-layer features (output folder, translation, preferences) have so

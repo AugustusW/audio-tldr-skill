@@ -10,6 +10,15 @@ spec = importlib.util.spec_from_file_location("frames", SCRIPT)
 frames = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(frames)
 
+YTDLP = ["/fake/bin/yt-dlp"]
+
+
+@pytest.fixture(autouse=True)
+def _resolved_ytdlp(monkeypatch):
+    """frames.py launches yt-dlp through transcribe.ytdlp_command(); pin it so
+    no test depends on what this machine has installed."""
+    monkeypatch.setattr(frames._transcribe, "ytdlp_command", lambda: list(YTDLP))
+
 
 def test_parse_at_list_mixed_formats():
     assert frames.parse_at_list("90, 3:35, 600") == [90.0, 215.0, 600.0]
@@ -78,8 +87,9 @@ def test_build_extract_cmd_seeks_before_input():
 
 
 def test_build_ytdlp_cmd_caps_720p():
-    cmd = frames.build_ytdlp_cmd("https://youtu.be/x", Path("/tmp/e"))
-    assert cmd[0] == "yt-dlp" and "--no-playlist" in cmd
+    cmd = frames.build_ytdlp_cmd(["py", "-m", "yt_dlp"], "https://youtu.be/x", Path("/tmp/e"))
+    assert cmd[:3] == ["py", "-m", "yt_dlp"] and "--no-playlist" in cmd
+    assert any("height<=720" in c for c in cmd)
     assert any("height<=720" in c for c in cmd)
     assert any(str(Path("/tmp/e") / "video.%(ext)s") in c for c in cmd)
 
@@ -151,7 +161,9 @@ class StubRunner:
     def __call__(self, cmd, **kw):
         self.calls.append(cmd)
         out, err, rc = "", "", 0
-        if cmd[0] == "yt-dlp":
+        if cmd[:len(YTDLP)] == YTDLP and "--print" in cmd:
+            out = "Talk Title\n"
+        elif cmd[:len(YTDLP)] == YTDLP:
             (Path(self.tmp) / "video.mp4").write_bytes(b"fake")
         elif cmd[0] == "ffmpeg" and "null" in cmd:
             err = "\n".join(f"pts_time:{t}" for t in self.scene_times)
@@ -300,3 +312,21 @@ def test_unprobeable_duration_does_not_block_extraction(monkeypatch, tmp_path, c
                            duration=None)
     assert rc == 0
     assert [f["ts"] for f in out["frames"]] == [10.0, 700.0]
+
+
+def test_url_without_ytdlp_fails_clearly(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(frames._transcribe, "ytdlp_command", lambda: None)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    calls = []
+    rc = frames.main(["https://youtu.be/x"], run=lambda cmd, **kw: calls.append(cmd))
+    assert rc == 2 and calls == []
+    assert "pip install yt-dlp" in capsys.readouterr().err
+
+
+def test_title_lookup_uses_the_resolved_launcher():
+    seen = []
+    def run(cmd, **kw):
+        seen.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="My Talk\n", stderr="")
+    assert frames._title_for("https://youtu.be/x", run) == "My Talk"
+    assert seen[0][:len(YTDLP)] == YTDLP

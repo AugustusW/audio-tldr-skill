@@ -69,12 +69,36 @@ class DownloadError(Exception):
     pass
 
 
+YTDLP_MISSING = ("yt-dlp not found — install it into this Python with: pip install yt-dlp "
+                 "(Windows: py -3 -m pip install yt-dlp; or brew install yt-dlp). A yt-dlp.cmd "
+                 "or .bat shim is not used")
+
+
+def ytdlp_command(windows=None):
+    """How to launch yt-dlp, as an argv prefix, or None when there is no safe way.
+
+    The bare name "yt-dlp" is never used: on Windows, CreateProcess then looks
+    for yt-dlp.exe only. On Windows the Python module comes first — a signed
+    python.exe running -m yt_dlp is allowed where Smart App Control blocks the
+    unsigned yt-dlp.exe. Elsewhere the executable comes first (a Homebrew
+    yt-dlp is usually newer than a stray pip copy). A .cmd/.bat is never run:
+    it goes through cmd.exe, where an & in a URL (...&t=30) splits the
+    command line, so a crafted link could run a second command."""
+    if windows is None:
+        windows = os.name == "nt"
+    module = [sys.executable, "-m", "yt_dlp"] if _module_available("yt_dlp") else None
+    found = shutil.which("yt-dlp")
+    exe = [found] if found and Path(found).suffix.lower() not in (".cmd", ".bat") else None
+    order = (module, exe) if windows else (exe, module)
+    return next((c for c in order if c), None)
+
+
 def download_audio(url: str, workdir: Path):
-    if not shutil.which("yt-dlp"):
-        raise DownloadError(
-            "yt-dlp not found — install with: pip install yt-dlp (or brew install yt-dlp)")
+    ytdlp = ytdlp_command()
+    if not ytdlp:
+        raise DownloadError(YTDLP_MISSING)
     probe = subprocess.run(
-        ["yt-dlp", "--no-warnings", "--dump-json", "--no-download", "--no-playlist", url],
+        [*ytdlp, "--no-warnings", "--dump-json", "--no-download", "--no-playlist", url],
         capture_output=True, text=True, timeout=120,
     )
     if probe.returncode != 0:
@@ -84,7 +108,7 @@ def download_audio(url: str, workdir: Path):
     safe = "".join(c for c in title if c.isalnum() or c in " -_")[:80] or "audio"
     out = workdir / f"{safe}.mp3"
     dl = subprocess.run(
-        ["yt-dlp", "--no-warnings", "-x", "--audio-format", "mp3",
+        [*ytdlp, "--no-warnings", "-x", "--audio-format", "mp3",
          "-o", str(out), "--no-playlist", url],
         capture_output=True, text=True, timeout=1800,
     )
@@ -188,10 +212,12 @@ def _maybe_reexec(raw_argv):
 def cmd_doctor() -> int:
     """Environment diagnosis: distinguish 'not installed' from 'installed in
     another Python' from 'importable but Metal blocked (sandbox)'."""
+    launcher = ytdlp_command()
     import platform
     info = {
         "python": {"path": sys.executable, "version": platform.python_version()},
-        "tools": {"yt_dlp": bool(shutil.which("yt-dlp")), "ffmpeg": bool(shutil.which("ffmpeg"))},
+        "tools": {"yt_dlp": bool(launcher), "yt_dlp_launcher": launcher,
+                  "ffmpeg": bool(shutil.which("ffmpeg"))},
         "backends": {
             "mlx_whisper": _module_available("mlx_whisper"),
             "faster_whisper": _module_available("faster_whisper"),
@@ -449,10 +475,11 @@ def fetch_context(source: str) -> dict:
                 return ctx
         except Exception:  # any lookup failure: fall through to yt-dlp
             pass
-    if not shutil.which("yt-dlp"):
+    ytdlp = ytdlp_command()
+    if not ytdlp:
         return {}
     probe = subprocess.run(
-        ["yt-dlp", "--no-warnings", "--dump-json", "--no-download", "--no-playlist", source],
+        [*ytdlp, "--no-warnings", "--dump-json", "--no-download", "--no-playlist", source],
         capture_output=True, text=True, timeout=CONTEXT_FETCH_TIMEOUT,
     )
     if probe.returncode != 0:

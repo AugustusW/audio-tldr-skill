@@ -89,8 +89,10 @@ def build_extract_cmd(video, ts: float, out_path, quality: int) -> list:
             "-frames:v", "1", "-q:v", str(quality), str(out_path)]
 
 
-def build_ytdlp_cmd(url: str, entry: Path) -> list:
-    return ["yt-dlp", "-f", "bv*[height<=720]+ba/b[height<=720]/b",
+def build_ytdlp_cmd(ytdlp: list, url: str, entry: Path) -> list:
+    """`ytdlp` is the launcher from transcribe.ytdlp_command() (never the bare
+    name: see there for why)."""
+    return [*ytdlp, "-f", "bv*[height<=720]+ba/b[height<=720]/b",
             "--no-playlist", "-o", str(entry / "video.%(ext)s"), url]
 
 
@@ -135,8 +137,11 @@ def _find_video(entry: Path):
 def _title_for(source: str, run) -> str:
     if not is_url(source):
         return Path(source).stem
+    ytdlp = _transcribe.ytdlp_command()
+    if not ytdlp:
+        return source
     try:
-        r = run(["yt-dlp", "--no-download", "--print", "title", source],
+        r = run([*ytdlp, "--no-download", "--print", "title", source],
                 capture_output=True, text=True, timeout=30)
         if r.returncode == 0 and r.stdout.strip():
             return r.stdout.strip().splitlines()[0]
@@ -206,8 +211,12 @@ def main(argv=None, run=subprocess.run) -> int:
     if is_url(source):
         video = _find_video(entry)
         if video is None:
+            ytdlp = _transcribe.ytdlp_command()
+            if not ytdlp:
+                print(f"error: {_transcribe.YTDLP_MISSING}", file=sys.stderr)
+                return 2
             entry.mkdir(parents=True, exist_ok=True)
-            r = run(build_ytdlp_cmd(source, entry), capture_output=True, text=True)
+            r = run(build_ytdlp_cmd(ytdlp, source, entry), capture_output=True, text=True)
             if r.returncode != 0:
                 print("error: video download failed — is yt-dlp installed and the "
                       "URL reachable?\n" + (r.stderr or "")[-2000:], file=sys.stderr)

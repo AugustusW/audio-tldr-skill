@@ -164,8 +164,11 @@ whisper.cpp 使用者可將 `AUDIO_TLDR_WHISPER_CPP_MODEL` 指向 Hugging Face �
 
 ### Windows 注意事項
 
-Windows 由底層 Python 生態支援並提供 PowerShell 安裝方式；**完整流程尚未在 Windows 上驗證**，
-歡迎回報問題。用 PowerShell 安裝：
+v0.9.0 之前的版本已在 Windows 上以 Claude Code 與 Codex 手動驗證過完整流程。v0.9.0 於 2026-10-06
+在 Windows 上實測（Windows 11 Pro、Python 3.12.11、faster-whisper 1.2.1、RTX 5080）：完整測試、
+`--doctor`、英文與中文真實轉錄（繁體輸出）、快取命中、`--format srt`。名詞校正在那台機器上通過單元
+測試，但**尚未在 Windows 上做端到端實測**（那幾次轉錄用的是本機檔，沒有來源資訊），歡迎回報問題。
+用 PowerShell 安裝：
 
 ```powershell
 # 前置準備（示範 winget；Chocolatey 用 choco install ffmpeg yt-dlp）
@@ -195,14 +198,13 @@ Copy-Item -Recurse -Force "audio-tldr-skill\skills\audio-tldr" $skillsDir
   並設 `AUDIO_TLDR_WHISPER_CPP_MODEL`。
 - **Smart App Control 可能擋下 `yt-dlp.exe`**——官方預建執行檔未簽章，Smart App Control 會靜默
   拒絕執行（不會跳提示，`yt-dlp` 就是完全不動；Event Viewer 可看到該檔案的 CodeIntegrity
-  事件 3077）。解法：改用 venv 內已簽章的 `python.exe` 呼叫，在 PATH 上放一個 `yt-dlp.cmd`：
-  ```bat
-  @echo off
-  "%~dp0python.exe" -m yt_dlp %*
-  ```
-  這個 `.cmd` 檔**必須是 CRLF 換行**（Windows batch 解析對這點很敏感；用 Unix 工具存成 LF
-  會靜默失敗）。預設存 LF 的編輯器（或 `git config core.autocrlf` 設成 `input`）要記得另外存
-  成 CRLF。
+  事件 3077）。解法：把 yt-dlp 裝進執行 skill 的同一個 Python——`py -3 -m pip install yt-dlp`。
+  Windows 上只要裝了這個模組，腳本就用 `python -m yt_dlp` 執行，已簽章的 `python.exe` 不會被擋。
+  **不會**使用 `yt-dlp.cmd` 之類的 shim（v0.9.1 之前這裡寫過這個繞法，但程式其實從來沒呼叫到它）：
+  批次檔會經過 `cmd.exe`，網址裡的 `&` 會把指令切開。
+- **YouTube 下載出現 HTTP 403**——新版 yt-dlp 下載 YouTube 需要 JavaScript 執行環境。安裝
+  [Deno](https://deno.com/)；或已經裝了 Node.js 的話，在 yt-dlp 設定檔
+  （`%APPDATA%\yt-dlp\config.txt`）加一行 `--js-runtimes node`。
 - **PowerShell 裡逗號列表要加引號**——`frames.py --at 90,215,10:05` 沒加引號會被 PowerShell
   拆成三個獨立參數，Python 根本收不到完整字串（引號內逗號才不會被特殊處理）。一律加引號：
   `--at "90,215,10:05"`。
@@ -394,7 +396,7 @@ Codex：`GPT-5.6 Terra`）——用 `digest_model` 偏好指定模型或關閉�
 | `--set-retention <天數>` | 自動清除超過 N 天的項目（`off` = 回到永久保留） |
 | `--force` | 忽略快取強制重轉錄 |
 | `--keep-audio` | 下載的 mp3 留在快取資料夾（預設轉錄完刪除） |
-| `--doctor` | JSON 環境診斷：Python 路徑/版本、backend 與工具可見性、其他有 backend 的 interpreter、MLX Metal 可用性 |
+| `--doctor` | JSON 環境診斷：Python 路徑/版本、backend 與工具可見性（含 yt-dlp 實際會用哪種方式執行）、其他有 backend 的 interpreter、MLX Metal 可用性 |
 | `--format txt\|srt\|vtt` | 輸出格式（預設 `txt`，不變）；`srt`/`vtt` 會另外產出含時間戳的字幕檔——見[字幕](#字幕srtvtt) |
 
 環境變數：
@@ -413,7 +415,7 @@ Codex：`GPT-5.6 Terra`）——用 `digest_model` 偏好指定模型或關閉�
 ```bash
 git clone https://github.com/AugustusW/audio-tldr-skill.git
 cd audio-tldr-skill
-python3 -m pytest tests/   # 259 個單元測試，不需網路或模型
+python3 -m pytest tests/   # 272 個單元測試，不需網路或模型
 ```
 
 版本規則：先在 [CHANGELOG](./CHANGELOG.md) 寫好新版本那一筆，然後跑
@@ -434,7 +436,7 @@ marketplace 版號、CHANGELOG 最新一筆，只要有一項跟 `plugin.json` �
 
 ## 狀態
 
-v0.9.0（[CHANGELOG](./CHANGELOG.md)）——核心邏輯有 259 個離線單元測試（yt-dlp、whisper 後端、
+v0.9.1（[CHANGELOG](./CHANGELOG.md)）——核心邏輯有 272 個離線單元測試（yt-dlp、whisper 後端、
 快取、OpenCC、ffmpeg/ffprobe 影格擷取、Ollama HTTP 端點皆以 mock 模擬，不需網路或模型）。
 完整流程於 2026-07-19 人工驗證
 （真實 YouTube 下載、轉錄、快取重摘要、中文轉換、`--keep-audio`、output 資料夾 md/html 摘要、
@@ -449,7 +451,8 @@ v0.9.0（[CHANGELOG](./CHANGELOG.md)）——核心邏輯有 259 個離線單元
 | ffmpeg | 8.1 |
 | yt-dlp | 2026.06.09 |
 
-依賴更新後行為可能不同。尚無自動化測試涵蓋：真實下載、其餘三個後端、Windows 環境。
+依賴更新後行為可能不同。尚無自動化測試涵蓋：真實下載、其餘三個後端、Windows 環境（Windows 有手動驗證，見
+[Windows 注意事項](#windows-注意事項)）。
 Codex 支援依開放 SKILL.md 標準；轉錄核心已於 2026-07-19 在 Codex 端完成端到端驗證
 （真實 53 分鐘 podcast 下載、轉錄、快取命中，含 interpreter 自動切換路徑）。
 摘要層功能（output 資料夾、翻譯、preferences）目前僅在 Claude Code 端驗證過。

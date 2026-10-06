@@ -4,6 +4,28 @@ All notable changes to this project are documented here. **Every release bumps `
 `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` (kept identical) and adds an
 entry below.**
 
+## [0.9.1] - 2026-10-06
+
+### Fixed
+
+- **yt-dlp on Windows: the documented Smart App Control workaround never ran.** The scripts
+  launched yt-dlp by bare name, and on Windows that makes `CreateProcess` look for
+  `yt-dlp.exe` only, so the `yt-dlp.cmd` shim the README recommended was never invoked; with
+  the unsigned exe blocked, downloads failed (found in a Windows run of v0.9.0). yt-dlp is now
+  resolved once, in `transcribe.ytdlp_command()`, and used by `transcribe.py` and `frames.py`
+  alike: on Windows, `python -m yt_dlp` when the module is installed (the signed `python.exe`
+  is allowed), else the full path of `yt-dlp.exe`; elsewhere, the executable first, then the
+  module. A `.cmd` or `.bat` is never run, because it goes through `cmd.exe`, where an `&` in a
+  URL (`…&t=30`) splits the command line and a crafted link could run a second command. With
+  neither available, the error says to `pip install yt-dlp` into the same Python, and
+  `--doctor` now reports the launcher it resolved (`tools.yt_dlp_launcher`).
+
+### Changed
+
+- **README (Windows):** the shim workaround is replaced by installing yt-dlp into the skill's
+  Python, and HTTP 403 from YouTube is explained (yt-dlp needs a JavaScript runtime: Deno, or
+  `--js-runtimes node`).
+
 ## [0.9.0] - 2026-10-06
 
 ### Added
