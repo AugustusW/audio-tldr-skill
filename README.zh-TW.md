@@ -54,6 +54,7 @@
 - ✓ 內建 Apple Podcasts fallback：yt-dlp extractor 失敗時自動走 iTunes lookup API——快取識別維持你貼的原始連結；貼節目頁連結（無單集 id）自動抓最新一集
 - ✓ 影片來源可選抽幀：scene detection 投影片截圖、或指定時間戳畫面——影片以 ≤720p 抓取、抽完即刪；幀圖與逐字稿共用同一快取 entry
 - ✓ 字幕匯出：`--format srt` / `--format vtt` 產出含時間戳的標準字幕檔，與逐字稿並存，四個後端皆支援
+- ✓ 名詞校正：發音跟別的詞一樣的名字（真真被轉成珍珍），在摘要時依來源自己的標題、頻道、說明欄、章節、tags，加上可選的 glossary 改回來；每一處修改都會列出，逐字稿本身不動
 - ✓ 手動 copy、Claude Code plugin、或裝進 Codex（開放 SKILL.md 標準）三種安裝方式
 
 ## 安裝
@@ -127,7 +128,7 @@ URL 來源請確認你有權下載與處理該內容，並遵守來源網站條�
 | 一般中文摘要 | `medium` |
 | 重視人名、專有名詞、精確度 | `large-v3` |
 | 顯卡夠力、要速度與品質 | `large-v3` 或 `large-v3-turbo` |
-| 台灣華語人名/術語、中英夾雜 | `breeze-asr-25`（見下方說明） |
+| 台灣華語口音、中英夾雜 | `breeze-asr-25`（見下方說明） |
 
 ```powershell
 python3 scripts/transcribe.py --model small "<來源>"   # 單次
@@ -148,6 +149,11 @@ whisper.cpp 使用者可將 `AUDIO_TLDR_WHISPER_CPP_MODEL` 指向 Hugging Face �
 但速度比 `large-v3-turbo` 慢約 3 倍（約 5x 即時 vs 約 15x，骨幹是較大的 large-v2）、輸出幾乎
 沒有標點，且英文單字一律小寫。預設維持 `large-v3-turbo`；當「台灣華語的人名與術語不能錯」比速度
 和標點更重要時，再選 `breeze-asr-25`。
+
+發音跟別的詞完全一樣的名字，換哪個模型都修不好。2026-10-06 用一支 26 分鐘的台灣 vlog 實測（同一台
+機器）：主持人的名字「真真」在 `large-v3-turbo`、把標題與頻道名當 initial prompt 的
+`large-v3-turbo`、`breeze-asr-25` 三種設定下都轉成「珍珍」；Breeze 修好了幾個聽錯的地名，也把一個
+預設模型原本轉對的地名弄錯。這種錯要靠[名詞校正](#名詞校正)。
 
 **選配——繁體中文**：whisper 對中文常輸出簡體。`pip install opencc` 之後，中文逐字稿自動轉台灣繁體——含慣用語在地化（`s2twp`，例：軟件→軟體）——並以 prompt
 引導模型優先用繁體詞彙；沒裝就維持原樣。
@@ -256,7 +262,8 @@ python3 scripts/transcribe.py --format vtt "<來源>"   # transcript.vtt，標�
 
 1. **轉錄**（`scripts/transcribe.py`）——算快取鍵（網址正規化或檔案內容 hash），命中直接秒回；
    未命中才 yt-dlp 下載 → 用最佳可用 whisper 後端轉錄 → 把 `transcript.txt` + `meta.json`
-   存進 `~/.cache/audio-tldr/<sha256>/`。
+   存進 `~/.cache/audio-tldr/<sha256>/`。網址來源另外把來源自己的資訊（標題、頻道、說明欄、
+   章節、tags）存成 `context.json`，用的是本來就抓到的 metadata。
 2. **Digest**——agent 讀快取逐字稿，產出重點、摘要、（長內容）大致時間軸。你的請求沒說要怎麼整理時，
    會先用**純對話文字**詢問（不出選單元件，透過通訊軟體純文字溝通也能用）。每份摘要同時存入
    output 資料夾（預設 `./audio-tldr-output/`），檔名 `<標題>-<日期>-<方式>.md`（或 `.html`）。
@@ -346,6 +353,31 @@ Codex：`GPT-5.6 Terra`）——用 `digest_model` 偏好指定模型或關閉�
 摘要，那樣會違背選這個模式的本意。代價：本機小模型的摘要品質通常低於 subagent 路徑
 （sonnet / GPT 等級模型）。
 
+## 名詞校正
+
+語音辨識寫下的是它聽到的音。發音跟別的詞一樣的名字，就會被寫成那個詞，光靠聲音沒有模型分得出來。
+不過來源通常在某個地方寫對了名字：標題、頻道名、說明欄、章節名、tags。
+
+所以摘要階段會拿到一份參考資料來核對拼寫：
+
+- **來源資訊**（網址來源）：存在快取的 `context.json`。YouTube 影片的資訊來自 yt-dlp；Apple
+  Podcasts 單集來自 iTunes lookup（節目名與單集說明，來賓名字通常寫在這裡）。v0.9.0 之前的快取
+  會在下次命中時補抓一次；抓不到的話，一週後才再試。
+- **你的 glossary**（選配）：`~/.config/audio-tldr/glossary.txt`，一行一個詞，可以在 `|` 後面寫
+  常被轉錯的樣子：
+
+  ```
+  真真 | 珍珍
+  真奈特 | 珍耐特, 真 night
+  Breeze-ASR
+  ```
+
+摘要模型被要求保守處理：逐字稿的詞跟參考資料裡的名字發音相同或相近時，用參考資料的寫法；其他聽錯的
+詞只在前後文毫無疑問時才修；其餘照逐字稿原樣。每一處修改都列在摘要最後一行。逐字稿檔案本身不會被改。
+
+來源資訊是上傳者寫的，所以跟逐字稿一樣只當資料、不當指令。它透過檔案而不是 prompt 交給摘要模型，
+先折成單行、包在隨機產生的邊界標記之間，而且只能決定一個詞怎麼寫。
+
 ## 快取與設定
 
 快取**預設永久保留**——除非你主動設定，否則絕不自動刪除。
@@ -374,13 +406,14 @@ Codex：`GPT-5.6 Terra`）——用 `digest_model` 偏好指定模型或關閉�
 | `AUDIO_TLDR_ZH_CONVERT` | 中文轉換：`off`，或任何 OpenCC 設定（預設 `s2twp`——台灣繁體含慣用語） |
 | `AUDIO_TLDR_PYTHON` | 指定執行的 Python interpreter（優先於自動探測）。whisper backend 裝在非預設 Python（如 homebrew 3.12）時適用 |
 | `AUDIO_TLDR_OLLAMA_HOST` | `digest_model: ollama:<model>` 用的 Ollama server 位址（預設 `http://localhost:11434`）；Ollama 跑在區網其他機器時設定。單次覆蓋用 `digest.py --ollama-host` |
+| `AUDIO_TLDR_GLOSSARY` | [名詞校正](#名詞校正) glossary 的路徑（預設 `$XDG_CONFIG_HOME/audio-tldr/glossary.txt`，未設則 `~/.config/audio-tldr/glossary.txt`） |
 
 ## 開發
 
 ```bash
 git clone https://github.com/AugustusW/audio-tldr-skill.git
 cd audio-tldr-skill
-python3 -m pytest tests/   # 204 個單元測試，不需網路或模型
+python3 -m pytest tests/   # 259 個單元測試，不需網路或模型
 ```
 
 版本規則：先在 [CHANGELOG](./CHANGELOG.md) 寫好新版本那一筆，然後跑
@@ -401,7 +434,7 @@ marketplace 版號、CHANGELOG 最新一筆，只要有一項跟 `plugin.json` �
 
 ## 狀態
 
-v0.8.0（[CHANGELOG](./CHANGELOG.md)）——核心邏輯有 204 個離線單元測試（yt-dlp、whisper 後端、
+v0.9.0（[CHANGELOG](./CHANGELOG.md)）——核心邏輯有 259 個離線單元測試（yt-dlp、whisper 後端、
 快取、OpenCC、ffmpeg/ffprobe 影格擷取、Ollama HTTP 端點皆以 mock 模擬，不需網路或模型）。
 完整流程於 2026-07-19 人工驗證
 （真實 YouTube 下載、轉錄、快取重摘要、中文轉換、`--keep-audio`、output 資料夾 md/html 摘要、
@@ -425,6 +458,10 @@ SRT/VTT 字幕匯出（v0.6.0）的四後端 segment 擷取與排版邏輯皆有
 端點（request 格式、response 解析、server 連不上、模型未 pull 等錯誤）；尚未對真實 Ollama server
 人工驗證過。影格擷取（v0.5.0）的單元測試以 stub 取代真實的 ffmpeg 與 ffprobe 呼叫；v0.7.1 修正的
 「時間戳超出片尾」行為是對 ffmpeg 8.1 實測的結果，其他版本的結束碼可能不同。
+名詞校正（v0.9.0）在一支 YouTube 影片上以 `sonnet` 摘要做過端到端驗證：跑五次，參考資料裡有的名字
+每次都改對並列出，原本轉對的地名沒被改，逐字稿不變；不給參考資料時名字仍是錯的。五次中有兩次，模型
+只憑前後文修了一個地名卻沒列出（其中一次還改錯），所以校正清單是模型自己回報的修改，不保證完整；Apple Podcasts 的來源資訊、Ollama 路徑的
+`--context`、以及本機小模型能否遵守規則，只有單元測試覆蓋或尚未實測。
 可能的下一步：講者分離。歡迎開 issue 與 PR。
 
 ## 授權

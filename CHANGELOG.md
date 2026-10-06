@@ -4,6 +4,69 @@ All notable changes to this project are documented here. **Every release bumps `
 `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` (kept identical) and adds an
 entry below.**
 
+## [0.9.0] - 2026-10-06
+
+### Added
+
+- **Name correction in the digest.** Speech recognition writes what it hears, so a name that
+  sounds like another word comes out as that word: on a 26-minute Taiwanese vlog the host 真真
+  was transcribed as 珍珍 and the channel 真奈特 as 珍耐特. The source usually spells them right
+  somewhere, and now the digest model gets to see where: a reference built from the source's
+  own details plus an optional glossary, with a rule to use the reference's spelling for
+  same-sounding names, fix other mishearings only when context leaves no doubt, and list every
+  change in one line at the end. The transcript file is never edited.
+
+- **`context.json` in each URL cache entry** — title, channel, description, chapters and tags,
+  taken from the metadata transcription already fetched (yt-dlp's probe, or the iTunes lookup
+  for Apple Podcasts, which carries the show name and episode notes). `transcribe.py` reports it
+  as `context_path`. Entries cached before this version fetch it once on their next hit; a
+  failed fetch is recorded and not retried for 7 days, and never changes the cache hit's output
+  or exit code.
+
+- **A glossary** at `~/.config/audio-tldr/glossary.txt` (`$XDG_CONFIG_HOME` honored,
+  `AUDIO_TLDR_GLOSSARY` overrides): one term per line, optionally `| misheard, misheard`.
+
+- **`digest.py --write-reference [--context <context_path>]`** writes the reference to
+  `reference.md` and prints its path, so a subagent reads it by path like the transcript;
+  **`digest.py … --context <context_path>`** puts the same block into the Ollama user message,
+  ahead of the transcript. One function builds it for both. The source details come from
+  whoever uploaded the media, so they are a separate, explicitly untrusted section: folded to
+  single lines (control and bidi characters removed), fenced by a per-call random marker they
+  cannot forge even by nesting fragments, trimmed so the block stays within 6000 characters
+  (the glossary itself is not trimmed; it is capped at 300 entries), and allowed to decide
+  spellings only.
+
+- **SKILL.md now says where the project lives and where to report problems.** The skill is
+  also distributed as a bare zip, where SKILL.md is the only file an agent reads. It names the
+  GitHub repository near the top, and a new Feedback section has the agent mention GitHub
+  issues once when the user hits a problem or asks for something the skill cannot do — not
+  after a digest that went fine, never filing on the user's behalf, and never putting their
+  source's content into a suggested report unprompted.
+
+### Changed
+
+- **The `breeze-asr-25` suggestion no longer promises to fix names.** On the same vlog, the
+  host's name came out wrong on `large-v3-turbo`, on `large-v3-turbo` with the title and channel
+  as the initial prompt, and on `breeze-asr-25` alike; Breeze fixed some misheard words and broke
+  a place name the default had right. Breeze is still suggested for accent and zh-en
+  code-switching.
+
+### Note
+
+- Acceptance, on that vlog with a `sonnet` digest: in five runs with the reference, all five
+  wrote 真真, listed `珍珍 → 真真` and `珍耐特 → 真奈特`, and left the correctly transcribed 五反田
+  alone; the transcript's sha256 was unchanged. Without the reference, the digest wrote 珍珍.
+  The first wording of the rule failed this test (the model did not treat a name inside the
+  title as a name); the shipped wording walks through the names first and has the model check
+  its own names before finishing.
+
+- **Known limit: the change list is not always complete for fixes made from context alone.** In
+  two of those five runs the model also renamed a river the transcript had misheard (雨天川)
+  without listing it — once correctly (隅田川), once wrongly (目黑川). Names backed by the
+  reference were listed every time. Treat the list as the corrections the model reports, not a
+  guaranteed diff; a mechanical check of digest names against the transcript is a possible
+  next step.
+
 ## [0.8.0] - 2026-09-04
 
 ### Added

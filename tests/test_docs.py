@@ -71,3 +71,22 @@ def test_readme_test_counts_match_the_suite(readme, lang):
         f"{readme.name} states {wrong} test(s) but the suite collects {collected}; "
         "update every count in the file"
     )
+
+
+SKILL_MD = release.ROOT / "skills" / "audio-tldr" / "SKILL.md"
+REPO_URL = "https://github.com/AugustusW/audio-tldr-skill"
+
+
+def test_skill_md_names_its_source_near_the_top():
+    """The skill is also distributed as a bare zip (e.g. on a marketplace),
+    where SKILL.md is the only file an agent reads; the README is not there
+    to say where the project lives."""
+    head = "\n".join(release.read(SKILL_MD).splitlines()[:15])
+    assert REPO_URL in head
+
+
+def test_skill_md_points_feedback_to_github_issues():
+    text = release.read(SKILL_MD)
+    assert "## Feedback" in text
+    feedback = text.split("## Feedback", 1)[1]
+    assert f"{REPO_URL}/issues" in feedback

@@ -1,5 +1,7 @@
 import importlib.util
 import json
+import subprocess
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -8,6 +10,23 @@ SCRIPT = Path(__file__).parent.parent / "skills" / "audio-tldr" / "scripts" / "t
 spec = importlib.util.spec_from_file_location("transcribe", SCRIPT)
 transcribe = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(transcribe)
+
+
+@pytest.fixture(autouse=True)
+def fetch_calls(monkeypatch):
+    """Cache hits backfill context.json through yt-dlp / the iTunes lookup.
+    This machine has yt-dlp and CI does not, so an unstubbed hit would pass
+    here for the wrong reason or reach the network. Stub it everywhere; tests
+    that exercise the fetch re-patch fetch_context themselves.
+
+    The stub records instead of raising: the backfill swallows every exception
+    by design, so a raising stub could never make a test fail."""
+    calls = []
+    def record(source):
+        calls.append(source)
+        return {}
+    monkeypatch.setattr(transcribe, "fetch_context", record)
+    return calls
 
 
 def test_cache_key_url_strips_tracking_params():
@@ -88,8 +107,9 @@ def test_download_audio_invokes_ytdlp(monkeypatch, tmp_path):
         return R()
 
     monkeypatch.setattr(transcribe.subprocess, "run", fake_run)
-    path, title = transcribe.download_audio("https://youtu.be/abc", tmp_path)
+    path, title, info = transcribe.download_audio("https://youtu.be/abc", tmp_path)
     assert title == "My Title" and path.endswith(".mp3")
+    assert info == {"title": "My Title"}
     assert any("-x" in c for c in calls)
 
 
@@ -272,7 +292,7 @@ def _fake_transcription(monkeypatch, tmp_path, segments=None):
     def fake_download(url, workdir):
         p = workdir / "t.mp3"
         p.write_bytes(b"audio-bytes")
-        return str(p), "Fake Title"
+        return str(p), "Fake Title", {"title": "Fake Title", "channel": "Fake Channel"}
 
     monkeypatch.setattr(transcribe, "download_audio", fake_download)
     monkeypatch.setattr(
@@ -487,9 +507,10 @@ def test_resolve_apple_lookup_success(monkeypatch):
              "episodeUrl": "https://rss.soundon.fm/x.mp3",
              "feedUrl": "https://feed.example/rss"}]}
     monkeypatch.setattr(transcribe, "_lookup_json", fake_lookup)
-    media, title = transcribe.resolve_apple_podcast(
+    media, title, ctx = transcribe.resolve_apple_podcast(
         "https://podcasts.apple.com/tw/podcast/ep/id150?i=1000776880208")
     assert media == "https://rss.soundon.fm/x.mp3" and title == "EP679"
+    assert ctx == {"title": "EP679"}
     assert "id=150" in seen_urls[0]                # collection lookup（單集 id 直查回 0）
     assert "country=tw" in seen_urls[0]            # storefront 必帶，否則台區節目查不到
 
@@ -513,10 +534,10 @@ def test_apple_fallback_keeps_source_identity(monkeypatch, tmp_path, capsys):
             raise transcribe.DownloadError("yt-dlp probe failed: HTTP Error 500")
         p = workdir / "e.mp3"
         p.write_bytes(b"audio-bytes")
-        return str(p), "uuid-title"
+        return str(p), "uuid-title", {"title": "uuid-title"}
     monkeypatch.setattr(transcribe, "download_audio", failing_then_ok)
     monkeypatch.setattr(transcribe, "resolve_apple_podcast",
-                        lambda u: ("https://cdn.example/ep42.mp3", "EP42 Title"))
+                        lambda u: ("https://cdn.example/ep42.mp3", "EP42 Title", {}))
     rc = transcribe.main([apple_url])
     captured = capsys.readouterr()
     assert rc == 0
@@ -1089,3 +1110,294 @@ def test_main_fresh_transcription_records_processing_seconds(monkeypatch, tmp_pa
     assert t["backend_call"] == meta["processing_seconds"]
     assert t["download"] is None  # local file: nothing was downloaded
     assert t["postprocess"] >= 0 and t["write"] >= 0
+
+
+# ── Source context (v0.9.0) ─────────────────────────────────────────
+
+def test_ytdlp_context_extracts_fields():
+    info = {"title": " T ", "channel": "真奈特每天都在瞎忙", "uploader": "u",
+            "description": "d", "chapters": [{"title": "開場"}, {"title": " "}, {}],
+            "tags": ["真奈特", "", None]}
+    assert transcribe.ytdlp_context(info) == {
+        "title": "T", "channel": "真奈特每天都在瞎忙", "description": "d",
+        "chapters": ["開場"], "tags": ["真奈特"]}
+
+
+def test_ytdlp_context_channel_fallbacks():
+    assert transcribe.ytdlp_context({"uploader": "U"})["channel"] == "U"
+    assert transcribe.ytdlp_context({"series": "S"})["channel"] == "S"
+    assert transcribe.ytdlp_context({"album": "A"})["channel"] == "A"
+    assert "channel" not in transcribe.ytdlp_context({"title": "t"})
+
+
+def test_ytdlp_context_caps():
+    info = {"description": "x" * 5000,
+            "chapters": [{"title": f"c{i}"} for i in range(60)],
+            "tags": [f"t{i}" for i in range(40)]}
+    ctx = transcribe.ytdlp_context(info)
+    assert len(ctx["description"]) == transcribe.CONTEXT_DESCRIPTION_MAX
+    assert len(ctx["chapters"]) == transcribe.CONTEXT_CHAPTERS_MAX
+    assert len(ctx["tags"]) == transcribe.CONTEXT_TAGS_MAX
+
+
+def test_ytdlp_context_tolerates_garbage():
+    assert transcribe.ytdlp_context(None) == {}
+    assert transcribe.ytdlp_context({"chapters": "nope", "tags": 5, "title": 3}) == {}
+
+
+def test_apple_context_maps_lookup_fields():
+    r0 = {"trackName": "EP1", "collectionName": "Show", "description": "guest: 王小明"}
+    assert transcribe.apple_context(r0) == {
+        "title": "EP1", "channel": "Show", "description": "guest: 王小明"}
+
+
+def test_fresh_transcription_writes_context(monkeypatch, tmp_path, capsys):
+    _fake_transcription(monkeypatch, tmp_path)
+    rc = transcribe.main(["https://youtu.be/ctx1"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    ctx = json.loads(Path(out["context_path"]).read_text())
+    assert ctx == {"title": "Fake Title", "channel": "Fake Channel"}
+    meta = json.loads((Path(out["transcript_path"]).parent / "meta.json").read_text())
+    assert "context_path" not in meta
+
+
+def test_apple_fallback_context_comes_from_lookup(monkeypatch, tmp_path, capsys):
+    _fake_transcription(monkeypatch, tmp_path)
+    apple_url = "https://podcasts.apple.com/tw/podcast/ep/id150?i=42"
+    def failing_then_ok(url, workdir):
+        if url == apple_url:
+            raise transcribe.DownloadError("yt-dlp probe failed")
+        p = workdir / "e.mp3"
+        p.write_bytes(b"a")
+        return str(p), "uuid", {"title": "uuid.mp3"}
+    monkeypatch.setattr(transcribe, "download_audio", failing_then_ok)
+    monkeypatch.setattr(transcribe, "resolve_apple_podcast",
+                        lambda u: ("https://cdn.example/e.mp3", "EP42",
+                                   {"title": "EP42", "channel": "Show"}))
+    transcribe.main([apple_url])
+    out = json.loads(capsys.readouterr().out)
+    assert json.loads(Path(out["context_path"]).read_text()) == {"title": "EP42", "channel": "Show"}
+
+
+def test_force_without_new_context_keeps_old_file(monkeypatch, tmp_path, capsys):
+    _fake_transcription(monkeypatch, tmp_path)
+    src = "https://youtu.be/ctx2"
+    transcribe.main([src])
+    first = json.loads(capsys.readouterr().out)["context_path"]
+    def bare_download(url, workdir):
+        p = workdir / "t.mp3"
+        p.write_bytes(b"a")
+        return str(p), "T", {}
+    monkeypatch.setattr(transcribe, "download_audio", bare_download)
+    transcribe.main([src, "--force"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["context_path"] == first
+    assert json.loads(Path(first).read_text())["channel"] == "Fake Channel"
+
+
+def test_local_file_writes_no_context(monkeypatch, tmp_path, capsys):
+    _fake_transcription(monkeypatch, tmp_path)
+    audio = tmp_path / "x.mp3"
+    audio.write_bytes(b"a")
+    transcribe.main([str(audio)])
+    assert "context_path" not in json.loads(capsys.readouterr().out)
+
+
+def test_context_path_for_ignores_marker_and_garbage(tmp_path):
+    (tmp_path / "context.json").write_text('{"unavailable": true, "checked_date": "x"}')
+    assert transcribe.context_path_for(tmp_path) is None
+    (tmp_path / "context.json").write_text("not json")
+    assert transcribe.context_path_for(tmp_path) is None
+    (tmp_path / "context.json").write_text('["list"]')
+    assert transcribe.context_path_for(tmp_path) is None
+
+
+def _cached_url_entry(tmp_path, src):
+    d = tmp_path / "audio-tldr" / transcribe.cache_key(src)
+    d.mkdir(parents=True)
+    t = d / "transcript.txt"
+    t.write_text("cached words")
+    (d / "meta.json").write_text(json.dumps(
+        {"transcript_path": str(t), "title": "T", "duration": 1.0,
+         "language": "zh", "backend": "mlx-whisper", "source": src}))
+    return d
+
+
+def test_cache_hit_backfills_context(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    d = _cached_url_entry(tmp_path, "https://youtu.be/old1")
+    monkeypatch.setattr(transcribe, "fetch_context", lambda s: {"channel": "真奈特每天都在瞎忙"})
+    rc = transcribe.main(["https://youtu.be/old1"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0 and out["cache_hit"] is True
+    assert out["context_path"] == str(d / "context.json")
+    assert json.loads((d / "context.json").read_text()) == {"channel": "真奈特每天都在瞎忙"}
+
+
+def test_cache_hit_backfill_failure_is_silent_and_marked(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    d = _cached_url_entry(tmp_path, "https://youtu.be/old2")
+    def boom(s):
+        raise subprocess.TimeoutExpired("yt-dlp", 30)
+    monkeypatch.setattr(transcribe, "fetch_context", boom)
+    rc = transcribe.main(["https://youtu.be/old2"])
+    cap = capsys.readouterr()
+    out = json.loads(cap.out)
+    assert rc == 0 and out["cache_hit"] is True
+    assert "context_path" not in out
+    assert "note:" in cap.err
+    assert json.loads((d / "context.json").read_text())["unavailable"] is True
+
+
+def test_cache_hit_empty_fetch_is_marked_too(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    d = _cached_url_entry(tmp_path, "https://youtu.be/old2b")
+    monkeypatch.setattr(transcribe, "fetch_context", lambda s: {})
+    assert transcribe.main(["https://youtu.be/old2b"]) == 0
+    assert json.loads((d / "context.json").read_text())["unavailable"] is True
+
+
+def test_cache_hit_does_not_retry_within_window(monkeypatch, tmp_path, capsys, fetch_calls):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    d = _cached_url_entry(tmp_path, "https://youtu.be/old3")
+    recent = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    (d / "context.json").write_text(json.dumps({"unavailable": True, "checked_date": recent}))
+    assert transcribe.main(["https://youtu.be/old3"]) == 0
+    assert "context_path" not in json.loads(capsys.readouterr().out)
+    assert fetch_calls == []
+
+
+def test_cache_hit_retries_after_window(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    d = _cached_url_entry(tmp_path, "https://youtu.be/old4")
+    old = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+    (d / "context.json").write_text(json.dumps({"unavailable": True, "checked_date": old}))
+    monkeypatch.setattr(transcribe, "fetch_context", lambda s: {"title": "T"})
+    transcribe.main(["https://youtu.be/old4"])
+    assert json.loads(capsys.readouterr().out)["context_path"] == str(d / "context.json")
+
+
+def test_cache_hit_corrupt_context_is_refetched(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    d = _cached_url_entry(tmp_path, "https://youtu.be/old5")
+    (d / "context.json").write_text("{broken")
+    monkeypatch.setattr(transcribe, "fetch_context", lambda s: {"title": "T"})
+    assert transcribe.main(["https://youtu.be/old5"]) == 0
+    assert json.loads((d / "context.json").read_text()) == {"title": "T"}
+
+
+def test_cache_hit_with_context_does_not_fetch(monkeypatch, tmp_path, capsys, fetch_calls):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    d = _cached_url_entry(tmp_path, "https://youtu.be/old6")
+    (d / "context.json").write_text(json.dumps({"title": "T"}))
+    assert transcribe.main(["https://youtu.be/old6"]) == 0
+    assert json.loads(capsys.readouterr().out)["context_path"] == str(d / "context.json")
+    assert fetch_calls == []
+
+
+def test_cache_hit_local_file_never_fetches(monkeypatch, tmp_path, capsys, fetch_calls):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    audio = tmp_path / "x.mp3"
+    audio.write_bytes(b"local-audio")
+    d = tmp_path / "audio-tldr" / transcribe.cache_key(str(audio))
+    d.mkdir(parents=True)
+    t = d / "transcript.txt"
+    t.write_text("words")
+    (d / "meta.json").write_text(json.dumps({"transcript_path": str(t), "title": "x"}))
+    assert transcribe.main([str(audio)]) == 0
+    assert not (d / "context.json").exists()
+    assert fetch_calls == []
+
+
+def test_fetch_context_apple_uses_lookup_first(monkeypatch):
+    monkeypatch.undo()  # drop the autouse stub: this test is about the real fetch
+    monkeypatch.setattr(transcribe, "_apple_episode",
+                        lambda u: {"trackName": "t", "collectionName": "Show"})
+    def no_ytdlp(*a, **k):
+        raise AssertionError("yt-dlp must not run when the lookup answered")
+    monkeypatch.setattr(transcribe.subprocess, "run", no_ytdlp)
+    ctx = transcribe.fetch_context("https://podcasts.apple.com/tw/podcast/x/id1?i=2")
+    assert ctx == {"title": "t", "channel": "Show"}
+
+
+def test_fetch_context_ytdlp_probe_uses_short_timeout(monkeypatch):
+    monkeypatch.undo()
+    seen = {}
+    monkeypatch.setattr(transcribe.shutil, "which", lambda c: "/bin/yt-dlp")
+    def fake_run(cmd, **kw):
+        seen.update(kw, cmd=cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"channel": "C"}), stderr="")
+    monkeypatch.setattr(transcribe.subprocess, "run", fake_run)
+    assert transcribe.fetch_context("https://youtu.be/z") == {"channel": "C"}
+    assert seen["timeout"] == transcribe.CONTEXT_FETCH_TIMEOUT
+    assert "--no-download" in seen["cmd"]
+
+
+def test_fetch_context_without_ytdlp_is_empty(monkeypatch):
+    monkeypatch.undo()
+    monkeypatch.setattr(transcribe.shutil, "which", lambda c: None)
+    assert transcribe.fetch_context("https://youtu.be/z") == {}
+
+
+# ── Review fixes (pre-PR) ───────────────────────────────────────────
+
+def test_context_write_failure_keeps_the_transcription(monkeypatch, tmp_path, capsys):
+    _fake_transcription(monkeypatch, tmp_path)
+    def broken(d, ctx):
+        raise OSError("disk full")
+    monkeypatch.setattr(transcribe, "write_context", broken)
+    rc = transcribe.main(["https://youtu.be/ctx-fail"])
+    cap = capsys.readouterr()
+    assert rc == 0
+    out = json.loads(cap.out)
+    assert (Path(out["transcript_path"]).parent / "meta.json").exists()
+    assert "warning" in cap.err
+
+
+def test_cache_hit_future_checked_date_is_treated_as_expired(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    d = _cached_url_entry(tmp_path, "https://youtu.be/future")
+    future = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+    (d / "context.json").write_text(json.dumps({"unavailable": True, "checked_date": future}))
+    monkeypatch.setattr(transcribe, "fetch_context", lambda s: {"title": "T"})
+    transcribe.main(["https://youtu.be/future"])
+    assert json.loads(capsys.readouterr().out)["context_path"]
+
+
+def test_backfill_note_does_not_promise_a_wait_it_could_not_record(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    _cached_url_entry(tmp_path, "https://youtu.be/rofs")
+    monkeypatch.setattr(transcribe, "fetch_context", lambda s: {})
+    real_write = Path.write_text
+    def deny(self, *a, **k):
+        if self.name == "context.json":
+            raise PermissionError("read-only")
+        return real_write(self, *a, **k)
+    monkeypatch.setattr(Path, "write_text", deny)
+    assert transcribe.main(["https://youtu.be/rofs"]) == 0
+    assert "7 days" not in capsys.readouterr().err
+
+
+def test_fetch_context_apple_does_not_resolve_media(monkeypatch):
+    """Backfill needs the lookup's metadata, not a playable URL: a
+    subscriber-only episode (no media) still has a show name and notes."""
+    monkeypatch.undo()
+    calls = []
+    def fake_lookup(url):
+        calls.append(url)
+        return {"results": [{"trackId": 2, "trackName": "EP", "collectionName": "Show"}]}
+    monkeypatch.setattr(transcribe, "_lookup_json", fake_lookup)
+    monkeypatch.setattr(transcribe, "_enclosure_from_feed",
+                        lambda *a: (_ for _ in ()).throw(AssertionError("no feed fetch")))
+    ctx = transcribe.fetch_context("https://podcasts.apple.com/tw/podcast/x/id1?i=2")
+    assert ctx == {"title": "EP", "channel": "Show"} and len(calls) == 1
+
+
+def test_fetch_context_apple_unexpected_error_still_tries_ytdlp(monkeypatch):
+    monkeypatch.undo()
+    monkeypatch.setattr(transcribe, "_lookup_json", lambda url: {"results": "garbage"})
+    monkeypatch.setattr(transcribe.shutil, "which", lambda c: "/bin/yt-dlp")
+    monkeypatch.setattr(transcribe.subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(
+        cmd, 0, stdout=json.dumps({"channel": "C"}), stderr=""))
+    assert transcribe.fetch_context("https://podcasts.apple.com/tw/podcast/x/id1?i=2") == {"channel": "C"}

@@ -56,6 +56,7 @@ re-upload, re-transcribe, re-pay      transcribe once, reuse from cache
 - ✓ Apple Podcasts fallback built in: when yt-dlp's extractor fails, episodes resolve via the iTunes lookup API — cache identity stays on your original link; a show link (no episode id) automatically uses the latest episode
 - ✓ Opt-in frame extraction for video sources: scene-detection slide capture, or stills at exact timestamps — video fetched at ≤720p and deleted after extraction; frames share the transcript's cache entry
 - ✓ Subtitle export: `--format srt` / `--format vtt` write a standard subtitle file with segment timestamps alongside the transcript, on any of the four backends
+- ✓ Name correction: names that sound like another word (真真 heard as 珍珍) are fixed in the digest from the source's own title, channel, description, chapters and tags, plus an optional glossary — every change is listed, and the transcript is never edited
 - ✓ Install by copy, as a Claude Code plugin, **or** into Codex (open SKILL.md standard)
 
 ## Install
@@ -134,7 +135,7 @@ aliases map to the backend's community conversion — see below):
 | General Chinese summaries | `medium` |
 | Names, jargon, accuracy-critical | `large-v3` |
 | Capable GPU, speed + quality | `large-v3` or `large-v3-turbo` |
-| Taiwanese Mandarin names/terms, zh-en code-switching | `breeze-asr-25` (see below) |
+| Taiwanese Mandarin accent, zh-en code-switching | `breeze-asr-25` (see below) |
 
 ```powershell
 python3 scripts/transcribe.py --model small "<source>"   # per run
@@ -160,6 +161,12 @@ about 3× slower than `large-v3-turbo` (≈5× realtime vs ≈15×, its backbone
 large-v2), produced almost no punctuation, and emitted English words in lowercase. The
 default stays `large-v3-turbo`; reach for `breeze-asr-25` when getting Taiwanese-Mandarin
 names and terminology right matters more than speed and punctuation.
+
+No model fixes a name that sounds exactly like another word. On a 26-minute Taiwanese vlog
+(2026-10-06, same machine), the host's name 真真 came out as 珍珍 on `large-v3-turbo`, on
+`large-v3-turbo` with the title and channel passed as the initial prompt, and on
+`breeze-asr-25` alike; Breeze fixed some misheard place names and broke one the default had
+right. That is what [Name correction](#name-correction) is for.
 
 **Optional — Traditional Chinese:** whisper often emits Simplified Chinese. `pip install opencc`
 and Chinese transcripts are converted to Taiwan Traditional automatically — including
@@ -285,7 +292,9 @@ Two phases, deliberately separated:
 1. **Transcribe** (`scripts/transcribe.py`) — resolves a cache key (normalized URL or file
    content hash), returns instantly on a hit; otherwise downloads via yt-dlp, transcribes with
    the best available whisper backend, and caches `transcript.txt` + `meta.json` under
-   `~/.cache/audio-tldr/<sha256>/`.
+   `~/.cache/audio-tldr/<sha256>/`. For URL sources it also keeps the source's own details
+   (title, channel, description, chapters, tags) in `context.json`, from the metadata it
+   fetched anyway.
 2. **Digest** — the agent reads the cached transcript and produces takeaways, a summary, and
    (for long content) an approximate timeline. If your request didn't say how to digest, it
    asks first — in plain conversational text, never a clickable menu, so it works over
@@ -392,6 +401,38 @@ error and stops — it never silently falls back to an agent-session digest, sin
 that would defeat the point of choosing this mode. Tradeoff: a small local model's
 digest quality is generally below the subagent path (sonnet / GPT-class models).
 
+## Name correction
+
+Speech recognition writes what it hears. A name that sounds like another word comes out as
+that word, and no model can tell them apart from the audio alone. The source usually spells
+the name right somewhere, though: in the title, the channel name, the description, the
+chapter titles, the tags.
+
+So the digest step gets a reference to check spellings against:
+
+- **Source details** (URL sources): kept in the cache entry as `context.json`. A YouTube
+  video's come from yt-dlp; an Apple Podcasts episode's from the iTunes lookup (show name and
+  episode notes, where guests are usually named). Entries cached before v0.9.0 fetch them once
+  on their next hit; if that fails, the next try is a week later.
+- **Your glossary** (optional): `~/.config/audio-tldr/glossary.txt` — one term per line,
+  optionally followed by `|` and how it gets misheard:
+
+  ```
+  真真 | 珍珍
+  真奈特 | 珍耐特, 真 night
+  Breeze-ASR
+  ```
+
+The digest model is told to be conservative: use the reference's spelling when a word sounds
+like one of its names, fix other mishearings only when the context leaves no doubt, and
+otherwise leave the transcript's word alone. Every change is listed in one line at the end of
+the digest. The transcript file itself is never edited.
+
+The source details are written by whoever uploaded the media, so they are treated like the
+transcript: as data, never instructions. They reach the digest model through a file rather
+than its prompt, folded to single lines and fenced by a random marker, and may only decide
+how a word is spelled.
+
 ## Cache & configuration
 
 The cache is **kept forever by default** — nothing is auto-deleted unless you opt in.
@@ -420,13 +461,14 @@ Environment variables:
 | `AUDIO_TLDR_ZH_CONVERT` | Chinese conversion: `off`, or an OpenCC config (default `s2twp` — Taiwan Traditional incl. common phrases) |
 | `AUDIO_TLDR_PYTHON` | pin the Python interpreter the script runs under (wins over auto-probing). Useful when your whisper backend lives in a non-default Python (e.g. Homebrew 3.12) |
 | `AUDIO_TLDR_OLLAMA_HOST` | Ollama server base URL used by `digest_model: ollama:<model>` (default `http://localhost:11434`); set when Ollama runs on another machine on your network. `digest.py --ollama-host` overrides it for one call |
+| `AUDIO_TLDR_GLOSSARY` | path to the [name-correction](#name-correction) glossary (default `$XDG_CONFIG_HOME/audio-tldr/glossary.txt`, else `~/.config/audio-tldr/glossary.txt`) |
 
 ## Develop
 
 ```bash
 git clone https://github.com/AugustusW/audio-tldr-skill.git
 cd audio-tldr-skill
-python3 -m pytest tests/   # 204 unit tests, no network or model needed
+python3 -m pytest tests/   # 259 unit tests, no network or model needed
 ```
 
 Versioning: write the [CHANGELOG](./CHANGELOG.md) entry for the new version, then run
@@ -450,7 +492,7 @@ Your preferences, custom templates (`~/.config/audio-tldr/`), and cache
 
 ## Status
 
-v0.8.0 ([CHANGELOG](./CHANGELOG.md)) — core logic is covered by 204 offline unit tests (yt-dlp,
+v0.9.0 ([CHANGELOG](./CHANGELOG.md)) — core logic is covered by 259 offline unit tests (yt-dlp,
 whisper backends, cache, OpenCC, ffmpeg/ffprobe frame extraction, and the Ollama HTTP endpoint
 are mocked; no network or models needed). The full flow has been manually verified (2026-07-19:
 real YouTube download, transcription, cached re-digest, Chinese conversion, `--keep-audio`,
@@ -479,7 +521,13 @@ digest mode (v0.6.0) is covered by unit tests against a mocked HTTP endpoint (re
 response parsing, unreachable-server and model-missing errors); it has not yet been manually
 verified against a real Ollama server. Frame extraction (v0.5.0) is covered by unit tests that
 stub ffmpeg and ffprobe rather than invoking them; the past-end-timestamp behavior fixed in
-v0.7.1 was measured against ffmpeg 8.1, and other versions may exit differently. Possible next:
+v0.7.1 was measured against ffmpeg 8.1, and other versions may exit differently. Name
+correction (v0.9.0) was checked end-to-end on one YouTube video with a `sonnet` digest: in five
+runs, names backed by the reference were fixed and listed every time, a correct place name was
+left alone, and the transcript was unchanged; without the reference the name stayed wrong. In
+two of the five runs a place name fixed from context alone was not listed, once wrongly, so the
+change list is what the model reports rather than a guaranteed diff; the Apple Podcasts context path, the Ollama path with `--context`, and
+small local models' handling of the rule are covered by unit tests or not yet exercised. Possible next:
 speaker diarization. Issues and PRs welcome.
 
 ## License

@@ -12,7 +12,7 @@ import sys
 import tempfile
 import time
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
@@ -79,7 +79,8 @@ def download_audio(url: str, workdir: Path):
     )
     if probe.returncode != 0:
         raise DownloadError(f"yt-dlp probe failed: {probe.stderr.strip()[:300]}")
-    title = json.loads(probe.stdout).get("title", "untitled")
+    info = json.loads(probe.stdout)
+    title = info.get("title", "untitled")
     safe = "".join(c for c in title if c.isalnum() or c in " -_")[:80] or "audio"
     out = workdir / f"{safe}.mp3"
     dl = subprocess.run(
@@ -94,7 +95,7 @@ def download_audio(url: str, workdir: Path):
         if not found:
             raise DownloadError("yt-dlp finished but no mp3 produced")
         out = found[0]
-    return str(out), title
+    return str(out), title, info
 
 
 def _module_available(name: str) -> bool:
@@ -296,10 +297,9 @@ def _resolve_show_to_latest(source: str):
     return f"{source}{sep}i={latest['trackId']}", latest.get("trackName") or "untitled"
 
 
-def resolve_apple_podcast(url: str):
-    """Apple Podcasts page URL -> (media_url, episode_title).
-    Returns None for non-Apple URLs; raises DownloadError with a specific
-    reason when an Apple URL cannot be resolved."""
+def _apple_episode(url: str):
+    """Apple Podcasts episode URL -> its iTunes lookup result, or None for a
+    non-Apple URL. Raises DownloadError with a specific reason otherwise."""
     ids = _apple_ids(url)
     if ids is None:
         return None
@@ -325,7 +325,16 @@ def resolve_apple_podcast(url: str):
             "Apple lookup: episode not found in the show's recent episodes "
             "(removed, region-locked, subscriber-only, or older than the 200-episode "
             "lookup window — paste the episode's RSS/media URL directly instead)")
-    r0 = hits[0]
+    return hits[0]
+
+
+def resolve_apple_podcast(url: str):
+    """Apple Podcasts page URL -> (media_url, episode_title, context).
+    Returns None for non-Apple URLs; raises DownloadError with a specific
+    reason when an Apple URL cannot be resolved."""
+    r0 = _apple_episode(url)
+    if r0 is None:
+        return None
     title = r0.get("trackName") or "untitled"
     media = r0.get("episodeUrl")
     if not media and r0.get("feedUrl"):
@@ -334,7 +343,7 @@ def resolve_apple_podcast(url: str):
         raise DownloadError(
             "Apple Podcasts: no public media URL for this episode "
             "(subscriber-only content cannot be fetched)")
-    return media, title
+    return media, title, apple_context(r0)
 
 
 def load_cached(key: str):
@@ -346,6 +355,144 @@ def load_cached(key: str):
     except (OSError, ValueError, KeyError):
         pass
     return None
+
+
+# ── Source context for name correction (v0.9.0) ─────────────────────
+# Whisper cannot tell 真真 from 珍珍: they sound identical. The source's own
+# metadata (title, channel, description, chapters, tags) usually spells the
+# names right, so it is kept next to the transcript for the digest step to
+# check spellings against. Extraction only — nothing here decides anything.
+CONTEXT_DESCRIPTION_MAX = 4000
+CONTEXT_CHAPTERS_MAX = 50
+CONTEXT_TAGS_MAX = 30
+CONTEXT_RETRY_DAYS = 7
+CONTEXT_FETCH_TIMEOUT = 30
+
+
+def _clean_str(value):
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def ytdlp_context(info) -> dict:
+    """yt-dlp info dict -> {title, channel, description, chapters, tags},
+    omitting anything missing or empty. Channel falls back through uploader,
+    then series/album (podcast extractors)."""
+    if not isinstance(info, dict):
+        return {}
+    ctx = {}
+    title = _clean_str(info.get("title"))
+    if title:
+        ctx["title"] = title
+    for key in ("channel", "uploader", "series", "album"):
+        channel = _clean_str(info.get(key))
+        if channel:
+            ctx["channel"] = channel
+            break
+    desc = _clean_str(info.get("description"))
+    if desc:
+        ctx["description"] = desc[:CONTEXT_DESCRIPTION_MAX]
+    chapters = info.get("chapters")
+    if isinstance(chapters, list):
+        titles = [t for t in (_clean_str(c.get("title")) for c in chapters
+                              if isinstance(c, dict)) if t]
+        if titles:
+            ctx["chapters"] = titles[:CONTEXT_CHAPTERS_MAX]
+    tags = info.get("tags")
+    if isinstance(tags, list):
+        clean = [t for t in (_clean_str(x) for x in tags) if t]
+        if clean:
+            ctx["tags"] = clean[:CONTEXT_TAGS_MAX]
+    return ctx
+
+
+def apple_context(r0) -> dict:
+    """iTunes episode lookup result -> the same shape as ytdlp_context."""
+    if not isinstance(r0, dict):
+        return {}
+    return ytdlp_context({"title": r0.get("trackName"),
+                          "channel": r0.get("collectionName"),
+                          "description": r0.get("description")})
+
+
+def write_context(d: Path, ctx: dict) -> None:
+    (d / "context.json").write_text(json.dumps(ctx, ensure_ascii=False))
+
+
+def _read_context_file(d: Path):
+    """The parsed context.json dict, or None if absent/unreadable/not a dict."""
+    try:
+        data = json.loads((d / "context.json").read_text())
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def context_path_for(d: Path):
+    """Path to usable context (not the 'unavailable' marker), else None."""
+    data = _read_context_file(d)
+    if not data or data.get("unavailable"):
+        return None
+    return str(d / "context.json")
+
+
+def fetch_context(source: str) -> dict:
+    """Metadata only, no audio, for a cache entry made before v0.9.0.
+    Apple links go to the iTunes lookup first (yt-dlp's Apple extractor is
+    the flaky one); everything else is a yt-dlp probe. May raise."""
+    if _apple_ids(source) is not None:
+        # Lookup only: the details live in the lookup result, and resolving a
+        # playable URL would add an RSS fetch and fail on subscriber-only
+        # episodes that still have a perfectly good show name and notes.
+        try:
+            ctx = apple_context(_apple_episode(source))
+            if ctx:
+                return ctx
+        except Exception:  # any lookup failure: fall through to yt-dlp
+            pass
+    if not shutil.which("yt-dlp"):
+        return {}
+    probe = subprocess.run(
+        ["yt-dlp", "--no-warnings", "--dump-json", "--no-download", "--no-playlist", source],
+        capture_output=True, text=True, timeout=CONTEXT_FETCH_TIMEOUT,
+    )
+    if probe.returncode != 0:
+        return {}
+    return ytdlp_context(json.loads(probe.stdout))
+
+
+def _backfill_context(d: Path, source: str) -> None:
+    """Best-effort, once per entry: a cache hit must never fail or change its
+    answer because metadata could not be fetched. A failure is recorded so the
+    hits within CONTEXT_RETRY_DAYS don't each wait on the network again."""
+    if not is_url(source):
+        return
+    existing = _read_context_file(d)
+    if existing and not existing.get("unavailable"):
+        return
+    if existing:
+        try:
+            checked = datetime.fromisoformat(existing.get("checked_date", ""))
+            # A date in the future (clock skew, hand edit) is not trusted to
+            # postpone the retry; it counts as expired like an unreadable one.
+            if timedelta(0) <= datetime.now(timezone.utc) - checked < timedelta(days=CONTEXT_RETRY_DAYS):
+                return
+        except (TypeError, ValueError):
+            pass  # unreadable date: treat the marker as expired
+    try:
+        ctx = fetch_context(source)
+    except Exception:  # timeout, bad JSON, network: all mean "not this time"
+        ctx = None
+    try:
+        if ctx:
+            write_context(d, ctx)
+            return
+        (d / "context.json").write_text(json.dumps(
+            {"unavailable": True, "checked_date": datetime.now(timezone.utc).isoformat()}))
+        when = f"after {CONTEXT_RETRY_DAYS} days"
+    except OSError:
+        when = "on the next run"
+    print(f"note: could not fetch source details for name correction; will retry {when}",
+          file=sys.stderr)
 
 
 # ── Cache management ────────────────────────────────────────────────
@@ -903,6 +1050,7 @@ def main(argv=None):
     if not args.force:
         meta = load_cached(key)
         if meta:
+            _backfill_context(d, args.source)
             if want_segments:
                 sub_path, err = _ensure_subtitle(d, meta, args.format)
                 if err:
@@ -912,7 +1060,11 @@ def main(argv=None):
             if args.keep_audio and not meta.get("audio_path"):
                 print("note: --keep-audio ignored on cache hit (transcript already cached; "
                       "re-run with --force to download and keep the audio)", file=sys.stderr)
-            print(json.dumps({**meta, "cache_hit": True}, ensure_ascii=False))
+            out = {**meta, "cache_hit": True}
+            cp = context_path_for(d)
+            if cp:
+                out["context_path"] = cp
+            print(json.dumps(out, ensure_ascii=False))
             return 0
 
     backend = detect_backend()
@@ -937,21 +1089,25 @@ def main(argv=None):
     tmpdir = None
     kept_audio = None
     media_url = None
+    context = None
     dl_t0 = time.monotonic()
     try:
         if is_url(args.source):
             tmpdir = tempfile.mkdtemp(prefix="audio-tldr-dl-")
             try:
-                audio_path, title = download_audio(args.source, Path(tmpdir))
+                audio_path, title, info = download_audio(args.source, Path(tmpdir))
+                context = ytdlp_context(info)
             except DownloadError:
                 resolved = resolve_apple_podcast(args.source)
                 if resolved is None:
                     raise
-                media_url, ep_title = resolved
+                # The fallback's own yt-dlp info describes a bare media file;
+                # the lookup result is what knows the show and the episode.
+                media_url, ep_title, context = resolved
                 print("note: Apple Podcasts extractor failed; falling back to the "
                       "episode's public media URL (cache identity stays on the Apple link)",
                       file=sys.stderr)
-                audio_path, dl_title = download_audio(media_url, Path(tmpdir))
+                audio_path, dl_title, _ = download_audio(media_url, Path(tmpdir))
                 title = ep_title or dl_title
         # Download wall-clock (URL sources only; includes the Apple-fallback retry).
         download_seconds = round(time.monotonic() - dl_t0, 2) if tmpdir else None
@@ -1001,6 +1157,15 @@ def main(argv=None):
     d.mkdir(parents=True, exist_ok=True)
     t_path = d / "transcript.txt"
     t_path.write_text(text)
+    if context:
+        # Only a fresh fetch replaces it: a --force re-run that found nothing
+        # keeps the details an earlier run did find. Like --keep-audio, an
+        # optional side-effect must never discard the transcription.
+        try:
+            write_context(d, context)
+        except OSError as e:
+            print(f"warning: could not save source details ({e}); continuing without them",
+                  file=sys.stderr)
     write_acc = time.monotonic() - w_t0
     model_used = (os.environ.get("AUDIO_TLDR_WHISPER_CPP_MODEL", "")
                   if backend == "whisper-cpp" else resolve_model(backend, args.model))
@@ -1052,7 +1217,11 @@ def main(argv=None):
     if sub_error:
         print(sub_error, file=sys.stderr)
         return 2
-    print(json.dumps({**meta, "cache_hit": False}, ensure_ascii=False))
+    out = {**meta, "cache_hit": False}
+    cp = context_path_for(d)
+    if cp:
+        out["context_path"] = cp
+    print(json.dumps(out, ensure_ascii=False))
     return 0
 
 
