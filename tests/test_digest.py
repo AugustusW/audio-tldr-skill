@@ -191,7 +191,7 @@ def test_main_success_prints_digest_and_reads_instructions_file(monkeypatch, tmp
     instructions.write_text("SYSTEM RULES")
     seen = {}
 
-    def fake_call(host, model, messages, timeout=1800):
+    def fake_call(host, model, messages, timeout=1800, **kw):
         seen["host"], seen["model"], seen["messages"] = host, model, messages
         return "THE DIGEST"
 
@@ -212,7 +212,7 @@ def test_main_reads_instructions_from_stdin_when_no_file_given(monkeypatch, tmp_
     monkeypatch.setattr(sys, "stdin", io.StringIO("STDIN RULES"))
     seen = {}
 
-    def fake_call(host, model, messages, timeout=1800):
+    def fake_call(host, model, messages, timeout=1800, **kw):
         seen["sys"] = messages[0]["content"]
         return "OK"
 
@@ -256,7 +256,7 @@ def test_main_ollama_error_surfaces_on_stderr_and_never_prints_a_fallback_digest
     instructions = tmp_path / "i.txt"
     instructions.write_text("rules")
 
-    def boom(host, model, messages, timeout=1800):
+    def boom(host, model, messages, timeout=1800, **kw):
         raise digest.OllamaUnreachable(
             "Ollama unreachable at http://localhost:11434 — is `ollama serve` running? (refused)")
 
@@ -276,7 +276,7 @@ def test_main_passes_ollama_host_flag_through(monkeypatch, tmp_path, capsys):
     instructions.write_text("rules")
     seen = {}
 
-    def fake_call(host, model, messages, timeout=1800):
+    def fake_call(host, model, messages, timeout=1800, **kw):
         seen["host"] = host
         return "ok"
 
@@ -572,7 +572,7 @@ def test_ollama_message_has_reference_before_transcript(monkeypatch, tmp_path):
     ctx = tmp_path / "context.json"
     ctx.write_text(json.dumps({"channel": "真奈特每天都在瞎忙"}))
     sent = {}
-    def fake_call(host, model, messages, timeout=0):
+    def fake_call(host, model, messages, timeout=0, **kw):
         sent["messages"] = messages
         return "digest"
     monkeypatch.setattr(digest, "call_ollama_chat", fake_call)
@@ -589,7 +589,7 @@ def test_ollama_without_reference_message_unchanged(monkeypatch, tmp_path):
     t.write_text("words")
     sent = {}
     monkeypatch.setattr(digest, "call_ollama_chat",
-                        lambda h, m, msgs, timeout=0: sent.setdefault("m", msgs) and "d")
+                        lambda h, m, msgs, timeout=0, **kw: sent.setdefault("m", msgs) and "d")
     monkeypatch.setattr(sys, "stdin", io.StringIO("instructions"))
     assert digest.main([str(t), "--model", "m"]) == 0
     assert sent["m"] == digest.build_messages("instructions", "words")
@@ -627,7 +627,7 @@ def test_both_paths_share_one_reference(monkeypatch, tmp_path, capsys):
     t = tmp_path / "transcript.txt"
     t.write_text("words")
     sent = {}
-    def fake_call(host, model, messages, timeout=0):
+    def fake_call(host, model, messages, timeout=0, **kw):
         sent["user"] = messages[1]["content"]
         return "d"
     monkeypatch.setattr(digest, "call_ollama_chat", fake_call)
@@ -705,3 +705,209 @@ def test_boundary_strip_handles_nested_markers():
 def test_sanitize_drops_c1_and_bidi_controls():
     ref = digest.build_reference({"title": "a‮b\x9bc⁦d"}, [], nonce="n")
     assert "title: abcd" in ref
+
+
+def test_call_ollama_chat_default_payload_keys_are_exactly_model_messages_stream(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured["body"] = json.loads(req.data.decode())
+        return _FakeResponse({"message": {"content": "ok"}})
+
+    monkeypatch.setattr(digest.urllib.request, "urlopen", fake_urlopen)
+    digest.call_ollama_chat("http://h", "m", [])
+    assert set(captured["body"]) == {"model", "messages", "stream"}
+
+
+def test_call_ollama_chat_optional_options_and_truncate(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured["body"] = json.loads(req.data.decode())
+        return _FakeResponse({"message": {"content": "ok"}})
+
+    monkeypatch.setattr(digest.urllib.request, "urlopen", fake_urlopen)
+    digest.call_ollama_chat("http://h", "m", [], options={"num_ctx": 8}, truncate=False)
+    assert captured["body"]["options"] == {"num_ctx": 8} and captured["body"]["truncate"] is False
+
+
+def test_reference_includes_creator_in_source_block():
+    ref = digest.build_reference({"title": "t", "channel": "c", "creator": "真真 老辣妹\n阿轟"},
+                                 [], nonce="n")
+    body = ref.split("<<source-metadata-n>>")[1].split("<</source-metadata-n>>")[0]
+    assert "creator: 真真 老辣妹 阿轟" in body
+    assert "creator" not in digest.build_reference(CTX, [], nonce="n")
+
+
+# ── usage: Ollama token counts ──────────────────────────────────────────
+
+def _reply(content, **counts):
+    return _FakeResponse({"message": {"role": "assistant", "content": content}, **counts})
+
+
+def test_call_ollama_chat_collects_and_sums_token_counts(monkeypatch):
+    replies = iter([_reply("a", prompt_eval_count=100, eval_count=7),
+                    _reply("b", prompt_eval_count=50, eval_count=3)])
+    monkeypatch.setattr(digest.urllib.request, "urlopen", lambda req, timeout=None: next(replies))
+    usage = {}
+    digest.call_ollama_chat("http://h", "m", [], usage=usage)
+    digest.call_ollama_chat("http://h", "m", [], usage=usage)
+    assert usage == {"input": 150, "output": 10}
+
+
+def test_call_ollama_chat_missing_count_makes_the_total_unknown(monkeypatch):
+    replies = iter([_reply("a", prompt_eval_count=100, eval_count=7), _reply("b", eval_count=3)])
+    monkeypatch.setattr(digest.urllib.request, "urlopen", lambda req, timeout=None: next(replies))
+    usage = {}
+    digest.call_ollama_chat("http://h", "m", [], usage=usage)
+    digest.call_ollama_chat("http://h", "m", [], usage=usage)
+    assert usage == {"input": None, "output": 10}  # a partial sum would be an estimate
+
+
+def test_main_usage_entry_records_the_digest_call(monkeypatch, tmp_path, capsys):
+    transcript = tmp_path / "transcript.txt"
+    transcript.write_text("hello")
+    instructions = tmp_path / "i.txt"
+    instructions.write_text("RULES")
+    monkeypatch.setattr(digest.urllib.request, "urlopen",
+                        lambda req, timeout=None: _reply("THE DIGEST", prompt_eval_count=9, eval_count=4))
+    rc = digest.main([str(transcript), "--model", "llama3.2", "--instructions-file", str(instructions),
+                      "--usage-entry", str(tmp_path)])
+    assert rc == 0 and capsys.readouterr().out.strip() == "THE DIGEST"
+    row = json.loads((tmp_path / "usage.jsonl").read_text(encoding="utf-8"))
+    assert (row["phase"], row["path"], row["model"], row["input"], row["output"], row["total"]) == \
+        ("digest", "ollama", "llama3.2", 9, 4, None)
+
+
+def test_main_without_usage_entry_writes_no_usage(monkeypatch, tmp_path, capsys):
+    transcript = tmp_path / "transcript.txt"
+    transcript.write_text("hello")
+    instructions = tmp_path / "i.txt"
+    instructions.write_text("RULES")
+    monkeypatch.setattr(digest.urllib.request, "urlopen",
+                        lambda req, timeout=None: _reply("D", prompt_eval_count=9, eval_count=4))
+    assert digest.main([str(transcript), "--model", "m", "--instructions-file", str(instructions)]) == 0
+    assert not (tmp_path / "usage.jsonl").exists()
+
+
+def test_call_ollama_chat_unknown_total_stays_unknown_when_counts_return(monkeypatch):
+    replies = iter([_reply("a", eval_count=7), _reply("b", prompt_eval_count=50, eval_count=3)])
+    monkeypatch.setattr(digest.urllib.request, "urlopen", lambda req, timeout=None: next(replies))
+    usage = {}
+    digest.call_ollama_chat("http://h", "m", [], usage=usage)
+    digest.call_ollama_chat("http://h", "m", [], usage=usage)
+    assert usage == {"input": None, "output": 10}
+
+
+# ── split_lines / estimate_tokens / ollama_num_ctx (v1.0 item 5) ─────────
+
+def test_split_lines_keeps_lines_whole_and_numbers_them():
+    text = "\n".join(f"第{i}行" + "字" * 10 for i in range(1, 31))
+    chunks = digest.split_lines(text, max_chars=60)
+    assert "\n".join(c.text for c in chunks) == text  # overlap 0: the chunks rebuild the text
+    assert chunks[0].first_line == 1 and chunks[-1].last_line == 30
+    assert all(c.text.split("\n")[0].startswith("第") for c in chunks)
+
+
+def test_split_lines_overlap_for_correction():
+    text = "\n".join(f"L{i}" + "x" * 20 for i in range(10))
+    chunks = digest.split_lines(text, max_chars=50, overlap_lines=1)
+    for a, b in zip(chunks, chunks[1:]):
+        assert b.first_line == a.last_line
+
+
+def test_split_lines_cuts_an_overlong_single_line_by_characters():
+    text = "嗯" * 1000
+    chunks = digest.split_lines(text, max_chars=300)
+    assert all(len(c.text) <= 300 for c in chunks)
+    assert chunks[1].text.startswith("嗯" * 200)  # 200-character overlap
+    covered = chunks[0].text + "".join(c.text[200:] for c in chunks[1:])
+    assert covered == text
+
+
+def test_split_lines_small_budget_terminates_and_covers():
+    text = "嗯" * 1000
+    for size in (1, 150, 200, 201):
+        chunks = digest.split_lines(text, max_chars=size)
+        assert len(chunks) <= 2 * len(text) // max(size, 1) + 2
+        assert set("".join(c.text for c in chunks)) == {"嗯"}
+        assert chunks[-1].text == text[-len(chunks[-1].text):]
+
+
+def test_estimate_tokens_is_conservative_for_cjk_and_lines():
+    # gemma4:26b on Ollama measured 0.69 tokens per Chinese character; 1.0 stays above it, but not by 1.6x
+    assert 690 <= digest.estimate_tokens("字" * 1000) <= 1104
+    plain = "\n".join(["你好你好你好你好你好"] * 100)
+    stamped = "\n".join(["[01:02] 你好你好你好你好你好"] * 100)
+    assert digest.estimate_tokens(stamped) - digest.estimate_tokens(plain) >= 100 * 8
+    assert digest.estimate_tokens(plain) <= 100 * (10 * 1.0 + 2)  # plain lines cost ~1, not 8
+
+
+def test_ollama_num_ctx_caps_at_model_context(monkeypatch):
+    monkeypatch.delenv("AUDIO_TLDR_OLLAMA_NUM_CTX", raising=False)
+    digest._NUM_CTX_CACHE.clear()
+    monkeypatch.setattr(digest.urllib.request, "urlopen", lambda req, timeout=None: _FakeResponse(
+        {"model_info": {"general.architecture": "llama", "llama.context_length": 8192}}))
+    assert digest.ollama_num_ctx("http://h", "small") == 8192
+    digest._NUM_CTX_CACHE.clear()
+    monkeypatch.setattr(digest.urllib.request, "urlopen", lambda req, timeout=None: _FakeResponse(
+        {"model_info": {"general.architecture": "gemma4", "gemma4.context_length": 262144}}))
+    assert digest.ollama_num_ctx("http://h", "big") == digest.OLLAMA_NUM_CTX_CAP
+
+
+def test_ollama_num_ctx_show_failure_uses_cap(monkeypatch):
+    monkeypatch.delenv("AUDIO_TLDR_OLLAMA_NUM_CTX", raising=False)
+    digest._NUM_CTX_CACHE.clear()
+
+    def boom(req, timeout=None):
+        raise digest.urllib.error.URLError("refused")
+    monkeypatch.setattr(digest.urllib.request, "urlopen", boom)
+    assert digest.ollama_num_ctx("http://h", "m") == digest.OLLAMA_NUM_CTX_CAP
+
+
+@pytest.mark.parametrize("value,expected", [("16384", 16384), ("99999999", None), ("abc", None), ("100", None)])
+def test_ollama_num_ctx_env_override(monkeypatch, value, expected):
+    digest._NUM_CTX_CACHE.clear()
+    monkeypatch.setenv("AUDIO_TLDR_OLLAMA_NUM_CTX", value)
+    monkeypatch.setattr(digest.urllib.request, "urlopen", lambda req, timeout=None: _FakeResponse(
+        {"model_info": {"general.architecture": "gemma4", "gemma4.context_length": 262144}}))
+    if expected is None:
+        with pytest.raises(digest.OllamaError, match="AUDIO_TLDR_OLLAMA_NUM_CTX"):
+            digest.ollama_num_ctx("http://h", "m")
+    else:
+        assert digest.ollama_num_ctx("http://h", "m") == expected
+
+
+def test_split_lines_overlap_never_breaks_max_chars():
+    text = "\n".join(["a" * 25, "b" * 25, "c" * 25])
+    chunks = digest.split_lines(text, max_chars=50, overlap_lines=1)
+    assert all(len(c.text) <= 50 for c in chunks)
+    assert [c.text for c in chunks] == ["a" * 25, "b" * 25, "c" * 25]
+
+
+def test_split_lines_overlap_random_lengths_cover_and_bound():
+    import random
+    rng = random.Random(7)
+    for _ in range(50):
+        lines = ["x" * rng.randint(1, 40) + str(i) for i in range(rng.randint(1, 40))]
+        text = "\n".join(lines)
+        chunks = digest.split_lines(text, max_chars=60, overlap_lines=1)
+        assert all(len(c.text) <= 60 for c in chunks)
+        covered = set()
+        for c in chunks:
+            covered.update(range(c.first_line, c.last_line + 1))
+        assert covered == set(range(1, len(lines) + 1))
+        for a, b in zip(chunks, chunks[1:]):
+            last = lines[a.last_line - 1]
+            if len(last) + 1 + len(lines[b.last_line - 1]) <= 60 and b.first_line <= b.last_line and b.last_line > a.last_line:
+                # the previous last line is shared whenever it fits with the next line
+                nxt = lines[a.last_line]
+                if len(last) + 1 + len(nxt) <= 60:
+                    assert b.first_line == a.last_line
+            assert not (b.first_line >= a.first_line and b.last_line <= a.last_line)  # no prefix-repeat
+
+
+@pytest.mark.parametrize("body", [[], "str", {"model_info": []}, {"model_info": None}])
+def test_model_context_length_non_dict_json_is_unknown(monkeypatch, body):
+    monkeypatch.setattr(digest.urllib.request, "urlopen", lambda req, timeout=None: _FakeResponse(body))
+    assert digest._model_context_length("http://h", "m") is None

@@ -1,0 +1,8 @@
+Source: https://archive.org/details/art_of_war_chinese_1506_librivox, file artofwar_01_sun_64kb.mp3, from 18.16s for 45s.
+LibriVox recording, dedicated to the public domain
+(https://creativecommons.org/publicdomain/mark/1.0/). Text: public domain
+(reference text based on Chinese Wikisource, 孫子兵法, 始計第一).
+
+Reference: 〈始計第一〉 from Chinese Wikisource, checked by ear against this clip
+(2026-10-10): the reader says 校之以七計, 而不畏危也 and 高下 — the transcriber
+drops all three, so this sample also measures omissions.

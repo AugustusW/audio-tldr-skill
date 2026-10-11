@@ -6,7 +6,7 @@
 
 [![Release](https://img.shields.io/github/v/release/AugustusW/audio-tldr-skill?color=brightgreen)](https://github.com/AugustusW/audio-tldr-skill/releases)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](#前置準備)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-skill%20%2B%20plugin-orange.svg)](https://claude.com/claude-code)
 [![Codex](https://img.shields.io/badge/Codex-compatible-black.svg)](https://developers.openai.com/codex/skills)
@@ -54,7 +54,8 @@
 - ✓ 內建 Apple Podcasts fallback：yt-dlp extractor 失敗時自動走 iTunes lookup API——快取識別維持你貼的原始連結；貼節目頁連結（無單集 id）自動抓最新一集
 - ✓ 影片來源可選抽幀：scene detection 投影片截圖、或指定時間戳畫面——影片以 ≤720p 抓取、抽完即刪；幀圖與逐字稿共用同一快取 entry
 - ✓ 字幕匯出：`--format srt` / `--format vtt` 產出含時間戳的標準字幕檔，與逐字稿並存，四個後端皆支援
-- ✓ 名詞校正：發音跟別的詞一樣的名字（真真被轉成珍珍），在摘要時依來源自己的標題、頻道、說明欄、章節、tags，加上可選的 glossary 改回來；每一處修改都會列出，逐字稿本身不動
+- ✓ 逐字稿校正：摘要前由模型提出讀音相近的修改，`correct.py` 檢查後套用到快取的副本；原本的逐字稿不會被修改（選配 `pypinyin`、`jellyfish`）
+- ✓ 名詞校正：發音跟別的詞一樣的名字（真真被轉成珍珍），在摘要時依來源自己的標題、頻道、節目／頻道作者、說明欄、章節、tags，加上可選的 glossary 改回來；每一處修改都會列出，逐字稿本身不動
 - ✓ 手動 copy、Claude Code plugin、或裝進 Codex（開放 SKILL.md 標準）三種安裝方式
 
 ## 安裝
@@ -97,10 +98,11 @@ cp -r audio-tldr-skill/skills/audio-tldr ~/.codex/skills/audio-tldr        # 個
 
 | 需求 | 用途 | 安裝 |
 |---|---|---|
-| Python 3.9+ | 執行轉錄腳本 | 通常已內建 |
+| Python 3.10+ | 執行轉錄腳本 | macOS 內建的 `python3` 是 3.9，不在支援範圍：`brew install python` 或 `uv python install 3.12`；Windows 用 python.org 安裝檔 |
 | `yt-dlp` | 從網址下載音訊 | `pip install yt-dlp` 或 `brew install yt-dlp` |
 | `ffmpeg` | 音訊抽取/轉檔 | `brew install ffmpeg` / `apt install ffmpeg` |
 | **任選一個** whisper 後端 | 語音轉文字 | 見下表 |
+| `pypinyin`、`jellyfish`（選配） | 逐字稿校正的讀音檢查 | `pip install pypinyin jellyfish`，裝進有 whisper backend 的那個 Python |
 
 whisper 後端（依自動偵測順序）：
 
@@ -166,9 +168,9 @@ whisper.cpp 使用者可將 `AUDIO_TLDR_WHISPER_CPP_MODEL` 指向 Hugging Face �
 
 v0.9.0 之前的版本已在 Windows 上以 Claude Code 與 Codex 手動驗證過完整流程。v0.9.0 於 2026-10-06
 在 Windows 上實測（Windows 11 Pro、Python 3.12.11、faster-whisper 1.2.1、RTX 5080）：完整測試、
-`--doctor`、英文與中文真實轉錄（繁體輸出）、快取命中、`--format srt`。名詞校正在那台機器上通過單元
-測試，但**尚未在 Windows 上做端到端實測**（那幾次轉錄用的是本機檔，沒有來源資訊），歡迎回報問題。
-用 PowerShell 安裝：
+`--doctor`、英文與中文真實轉錄（繁體輸出）、快取命中、`--format srt`。v1.0 於 2026-10-11 在 Claude
+Code 與 Codex 上各跑過一次完整流程（下載、轉錄、逐字稿校正、摘要、`.srt`／`.vtt`、快取命中），
+這次實測找到並修正的問題見 CHANGELOG。用 PowerShell 安裝：
 
 ```powershell
 # 前置準備（示範 winget；Chocolatey 用 choco install ffmpeg yt-dlp）
@@ -202,6 +204,7 @@ Copy-Item -Recurse -Force "audio-tldr-skill\skills\audio-tldr" $skillsDir
   Windows 上只要裝了這個模組，腳本就用 `python -m yt_dlp` 執行，已簽章的 `python.exe` 不會被擋。
   **不會**使用 `yt-dlp.cmd` 之類的 shim（v0.9.1 之前這裡寫過這個繞法，但程式其實從來沒呼叫到它）：
   批次檔會經過 `cmd.exe`，網址裡的 `&` 會把指令切開。
+- **agent 沙箱裡的 Python shim 被擋**——開了 Smart App Control 或其他應用程式控制原則時，uv 建立的 `%USERPROFILE%\.local\bin\python3.12.exe` 這類 shim 在 Codex 沙箱裡可能被拒絕執行（`os error 4551`）。改把 `AUDIO_TLDR_PYTHON` 設成有 backend 的那個環境的 `python.exe`（例如 venv 的 `Scripts\python.exe`）。Windows 上切換直譯器會以子程序執行並回傳它的輸出與退出碼（v1.0 之前呼叫端會拿到空輸出與 exit 0）。
 - **YouTube 下載出現 HTTP 403**——新版 yt-dlp 下載 YouTube 需要 JavaScript 執行環境。安裝
   [Deno](https://deno.com/)；或已經裝了 Node.js 的話，在 yt-dlp 設定檔
   （`%APPDATA%\yt-dlp\config.txt`）加一行 `--js-runtimes node`。
@@ -284,6 +287,8 @@ python3 scripts/transcribe.py --format vtt "<來源>"   # transcript.vtt，標�
   詳見[整理樣板](#整理樣板)。
 - **快取逐字稿是未加密純文字、預設永久保存**，位於 `~/.cache/audio-tldr/`。處理敏感內容後請 `--clear`
   該筆，或預先設定 retention。
+- **校正後的逐字稿同樣是明文。** `transcript.corrected.txt`、`corrections.json`、`reference.md`
+  和逐字稿放在同一個快取資料夾，適用同一個保留期限設定。見[逐字稿校正](#逐字稿校正)。
 - **摘要成品長存於 output 資料夾**（預設 `./audio-tldr-output/`，相對於工作目錄）——包含全文翻譯
   （等同整份逐字稿內容）。output 資料夾沒有清理或保留期限機制，請自行手動刪除；在 git 版控目錄內
   使用時建議把該資料夾加進 `.gitignore`。
@@ -355,15 +360,37 @@ Codex：`GPT-5.6 Terra`）——用 `digest_model` 偏好指定模型或關閉�
 摘要，那樣會違背選這個模式的本意。代價：本機小模型的摘要品質通常低於 subagent 路徑
 （sonnet / GPT 等級模型）。
 
+## 逐字稿校正
+
+語音辨識會把名字和術語寫成讀音相近的字。每次摘要中文或英文逐字稿之前，先由模型提出修改清單，`correct.py` 檢查，摘要再讀校正後的副本。
+
+- **做法。** 模型只回傳修改清單（錯字、正確字、前後文），不重寫逐字稿。每一筆修改要通過下列全部檢查才會採用；任何一項不過就丟掉那一筆，其他筆照常套用。
+  - *讀音。* 中文：音節數相同，且不同的音節不超過三分之一（用 `pypinyin` 取不帶聲調的拼音；zh/z、ch/c、sh/s、ing/in、eng/en、ang/an、l/n 視為相同；多音字取最接近的讀音）。英文：兩邊詞數相同時逐詞比對（`jellyfish` 的 metaphone，距離不超過 0.45），否則整串比對。
+  - *形狀。* 兩邊各不超過 24 個字元；位置要唯一（或該筆標明「全部出現處」）；數字字元（阿拉伯數字或中文數字）只能換成讀音完全相同的字（忽略聲調），否則該筆修改拒絕；同一筆混用中文與拉丁字母的修改拒絕。
+  - *上限。* 全部修改合計最多改動文字的 5%（或 24 個字元，取較大者）；套用 5 處以上的修改會列在摘要最後，方便你檢查。
+  - *核對。* 套用後再從另一個方向核對一次。只要有對不上的地方，整份校正副本作廢，摘要改用原文。
+- **安裝。** `pip install pypinyin jellyfish`（選配），裝進有 whisper backend 的那個 Python：`--doctor` 會列出每個直譯器的 `module_backend`、`pypinyin`、`jellyfish`，`correct.py` 會自動換到有這兩個套件的直譯器，和 `transcribe.py` 自動換到有 backend 的直譯器一樣（`AUDIO_TLDR_PYTHON` 兩者都會覆寫）。Homebrew 的 Python 會因 PEP 668 拒絕 `pip`：改用 `<那個 python> -m pip install --break-system-packages pypinyin jellyfish`，或把 backend 和兩個套件裝進虛擬環境，再把 `AUDIO_TLDR_PYTHON` 指向它。缺哪個套件，該語言的修改就不檢查也不套用，摘要照舊進行。`pypinyin` 負責中文，`jellyfish` 負責英文。之後才裝，需要它的逐字稿會重算一次。
+- **存在哪。** 在逐字稿的快取資料夾裡：`transcript.corrected.txt`（校正副本）、`corrections.json`（每一筆修改的接受或拒絕與原因）、`reference.md`。字幕的 `transcript.corrected.srt` / `.vtt` 在摘要需要字幕時才產生。校正不會修改 `transcript.txt`。（1.0 第一次讀到舊版快取的逐字稿時，會在 Whisper 段落之間插入換行（過長的行才在句末斷開），一個字都不會變。只升級嚴格 UTF-8 且沒有 BOM 的檔案；有 BOM 或非 UTF-8（例如 Windows code page）的快取維持原樣，仍然是一行。）這些檔案和逐字稿一樣是明文，適用同一個保留期限設定。
+- **重用。** 同一來源再摘要，直接使用校正副本。逐字稿、glossary 或來源資訊有變，或新版校正規則出來時才重做；不會因此重新轉錄。
+- **隱私模式。** `digest_model` 設為 `ollama:<model>` 時，修改清單也由本機 Ollama 模型提出，逐字稿一樣不離開這台機器。Ollama 出錯（包含 context 小到放不下請求）時，agent 顯示錯誤並停下。
+
+  長稿會分段摘要再合併；stderr 的 `note:` 會說明，並標出請求數。加 `--whole-text` 則不分段，直接報錯；每個請求的回覆都可以使用該請求 prompt 之後剩下的 context（至少 4096 token）。分段與合併這兩步會要求模型不要思考（Ollama 的 `think: false`，沒有思考功能的模型會忽略），最後的摘要用模型預設。context 大小是 `AUDIO_TLDR_OLLAMA_NUM_CTX`，預設 32768 或模型本身上限，取較小者。
+
+  時間戳檢查：輸入是字幕檔時，摘要裡不在字幕中出現的 `[MM:SS]` / `[H:MM:SS]` 方括號時間戳會在輸出前移除，stderr 的說明會標出數量。純文字輸入不過濾，其他寫法（區間、小括號）也不檢查。
+- **用量紀錄。** 每次校正、每次摘要都在同一個快取資料夾的 `usage.jsonl` 加一行：階段（`correct` 或 `digest`）、路徑（`subagent`、`ollama` 或 `inline`）、模型，以及 token 數（`input`、`output`、`cache_write`、`cache_read`、`total`）。平台沒回報的欄位寫 `null`，不估算：Claude Code 或 Codex 的 subagent 只回報總數，本機 Ollama 回報 input 與 output，主模型自己寫的摘要（`digest_model: off`）沒有單次用量。只記數字與模型名稱，不記逐字稿或摘要內容。用 `--force` 重新轉錄時這個檔案會保留。
+- **語言。** 中文（國語、粵語）與英文。轉錄引擎記下的語言可能是代碼、地區標記（`zh-TW`）或名稱（`Chinese`）；其他語言（例如日文）會跳過。
+- **已知限制。** 讀音相近但意思不同的詞，無法靠讀音分辨：校準樣本裡 Paris → Prague 就會通過讀音檢查。其他限制（24 字元、位置唯一、總量 5%、套用 5 處以上列在摘要）只能壓低風險，不能消除。英文門檻主要用手工整理的詞組校準；中文門檻用真實辨識錯誤加上手工整理的邊界詞組校準。
+- **實測效果。** 在兩段 podcast（中文，合計約 22 分鐘）上量測，不帶 glossary；給模型的參考資料是單集標題、頻道、說明欄，以及節目作者（節目列出的主持人名字）。校正指令與來源資訊在前幾次量測後有擴充，這裡的數字是最後一次重跑的結果。字元錯誤率（CER，兩段合計，對照人工校過的參考稿）：mlx-whisper 的逐字稿用 `claude`（3 次）從 6.23% 降到 5.10-5.18%，faster-whisper 的從 7.35% 降到 6.56-6.82%。參考稿裡出現的人名、地名與產品名，有幾處被轉對：mlx 校正前 13/33、校正後 29-32；faster-whisper 校正前 21/33、校正後 30-32；其中一部分進步來自作者名字現在在參考資料裡。用 `codex`（各 1 次）CER 為 5.18% 與 6.44%；用本機 Ollama 模型（`gemma4:26b`，mlx 逐字稿，1 次）為 5.66%，名字 22/33。這些執行中沒有任何一筆修改讓對照參考稿的分數變差。英文公開樣本 `canterville-en` 模型沒有提出任何修改，文字不變。限制：只有這兩段；參考稿由兩個模型的草稿校出，本身也可能有錯。這是這兩段的結果，不是對其他音檔的保證。
+
 ## 名詞校正
 
 語音辨識寫下的是它聽到的音。發音跟別的詞一樣的名字，就會被寫成那個詞，光靠聲音沒有模型分得出來。
-不過來源通常在某個地方寫對了名字：標題、頻道名、說明欄、章節名、tags。
+不過來源通常在某個地方寫對了名字：標題、頻道名、節目／頻道作者（主持人名字常在這裡）、說明欄、章節名、tags。
 
 所以摘要階段會拿到一份參考資料來核對拼寫：
 
 - **來源資訊**（網址來源）：存在快取的 `context.json`。YouTube 影片的資訊來自 yt-dlp；Apple
-  Podcasts 單集來自 iTunes lookup（節目名與單集說明，來賓名字通常寫在這裡）。v0.9.0 之前的快取
+  Podcasts 單集來自 iTunes lookup（節目名、節目作者與單集說明，來賓名字通常寫在這裡）。v0.9.0 之前的快取
   會在下次命中時補抓一次；抓不到的話，一週後才再試。
 - **你的 glossary**（選配）：`~/.config/audio-tldr/glossary.txt`，一行一個詞，可以在 `|` 後面寫
   常被轉錯的樣子：
@@ -394,6 +421,7 @@ Codex：`GPT-5.6 Terra`）——用 `digest_model` 偏好指定模型或關閉�
 | `--clear "<來源>"` | 清除單筆 |
 | `--clear-all --yes` | 全部清除 |
 | `--set-retention <天數>` | 自動清除超過 N 天的項目（`off` = 回到永久保留） |
+| `--ack-retention-notice` | 停止首次使用的「逐字稿存放位置」告知（skill 告知後會自己執行） |
 | `--force` | 忽略快取強制重轉錄 |
 | `--keep-audio` | 下載的 mp3 留在快取資料夾（預設轉錄完刪除） |
 | `--doctor` | JSON 環境診斷：Python 路徑/版本、backend 與工具可見性（含 yt-dlp 實際會用哪種方式執行）、其他有 backend 的 interpreter、MLX Metal 可用性 |
@@ -407,6 +435,7 @@ Codex：`GPT-5.6 Terra`）——用 `digest_model` 偏好指定模型或關閉�
 | `AUDIO_TLDR_WHISPER_CPP_MODEL` | ggml 模型檔路徑（啟用 whisper.cpp 後端） |
 | `AUDIO_TLDR_ZH_CONVERT` | 中文轉換：`off`，或任何 OpenCC 設定（預設 `s2twp`——台灣繁體含慣用語） |
 | `AUDIO_TLDR_PYTHON` | 指定執行的 Python interpreter（優先於自動探測）。whisper backend 裝在非預設 Python（如 homebrew 3.12）時適用 |
+| `AUDIO_TLDR_OLLAMA_NUM_CTX` | Ollama 請求的 context 大小（`num_ctx`）；預設 32768 或模型本身上限，取較小者。放不下的逐字稿會分段摘要 |
 | `AUDIO_TLDR_OLLAMA_HOST` | `digest_model: ollama:<model>` 用的 Ollama server 位址（預設 `http://localhost:11434`）；Ollama 跑在區網其他機器時設定。單次覆蓋用 `digest.py --ollama-host` |
 | `AUDIO_TLDR_GLOSSARY` | [名詞校正](#名詞校正) glossary 的路徑（預設 `$XDG_CONFIG_HOME/audio-tldr/glossary.txt`，未設則 `~/.config/audio-tldr/glossary.txt`） |
 
@@ -415,8 +444,17 @@ Codex：`GPT-5.6 Terra`）——用 `digest_model` 偏好指定模型或關閉�
 ```bash
 git clone https://github.com/AugustusW/audio-tldr-skill.git
 cd audio-tldr-skill
-python3 -m pytest tests/   # 272 個單元測試，不需網路或模型
+python3 -m pytest tests/   # 688 個單元測試，不需網路或模型
 ```
+
+轉錄品質用 `scripts/asr_eval.py` 量測（需要 `opencc`、`ffmpeg` 與一個 whisper backend；不屬於 skill 本身）：
+
+```bash
+python3.12 scripts/asr_eval.py run --samples public --repeat 3 --label baseline
+python3.12 scripts/asr_eval.py compare <baseline.json> <new.json>   # 退步時 exit 1
+```
+
+`tests/fixtures/eval/` 的公開樣本是 LibriVox 公有領域錄音，加上 ffmpeg 產生的音調與靜音，用來驗證工具本身；參考稿用 `〔名字〕` 標記人名（每一次出現都要標）。品質決策以上游 repo 內的私有 podcast 樣本為準。
 
 版本規則：先在 [CHANGELOG](./CHANGELOG.md) 寫好新版本那一筆，然後跑
 
@@ -434,9 +472,20 @@ marketplace 版號、CHANGELOG 最新一筆，只要有一項跟 `plugin.json` �
 新版釋出後重新複製 skill 資料夾即可。你的習慣設定與自建樣板（`~/.config/audio-tldr/`）、
 快取（`~/.cache/audio-tldr/`）都在 skill 資料夾外——更新永遠不會動到它們。
 
+## 相容性
+
+從 1.0 起，所有 1.x 版本都保證你電腦上的這些東西照樣能用：
+
+- **快取**：0.9.x 或任何 1.x 產生的快取，之後的 1.x 都讀得到、會直接重用，整個快取資料夾搬家或複製之後也一樣。1.x 第一次用到某一筆時會順手把它更新成新格式，退回 0.9.x 仍然找得到（如果搬過家，退版前先讓 1.x 用過一次）。
+- **Windows 注意事項**：在系統字碼頁不是 UTF-8 的 Windows 上，若使用 Python 3.14 或更舊版本，退回 0.9.x 後，0.9.x 的本機 Ollama 摘要可能讀不了 1.x 產生的逐字稿（1.x 以 UTF-8 寫入逐字稿）；找到快取項目仍然正常。
+- **glossary**：位置不變，格式一樣是一行一個詞。
+- **設定**：`config.json` 與 `~/.config/audio-tldr/`（習慣設定、樣板）的鍵與位置不變；新版本只會新增鍵。
+
+不在保證範圍內：腳本的參數與輸出欄位、內建樣板的文字、逐字稿與摘要的具體內容。這些可能隨版本調整，會寫在 [CHANGELOG](./CHANGELOG.md)。
+
 ## 狀態
 
-v0.9.1（[CHANGELOG](./CHANGELOG.md)）——核心邏輯有 272 個離線單元測試（yt-dlp、whisper 後端、
+v0.9.1（[CHANGELOG](./CHANGELOG.md)）——核心邏輯有 688 個離線單元測試（yt-dlp、whisper 後端、
 快取、OpenCC、ffmpeg/ffprobe 影格擷取、Ollama HTTP 端點皆以 mock 模擬，不需網路或模型）。
 完整流程於 2026-07-19 人工驗證
 （真實 YouTube 下載、轉錄、快取重摘要、中文轉換、`--keep-audio`、output 資料夾 md/html 摘要、

@@ -1,7 +1,9 @@
 name: ci
 
 # The suite is offline by design (yt-dlp, whisper backends, ffmpeg and the
-# Ollama endpoint are all mocked), so CI needs pytest and nothing else. This
+# Ollama endpoint are all mocked), so CI needs pytest plus the two optional
+# sound-alike checkers (pypinyin, jellyfish): the correction thresholds are
+# pinned by tests that must run for real, not be skipped. This
 # includes tests/test_docs.py, so a release that forgets a README number or a
 # CHANGELOG entry goes red here instead of shipping quietly.
 
@@ -19,6 +21,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - run: pip install pytest
+      - run: pip install pytest "pypinyin>=0.50" "jellyfish>=1.0"
       - run: python3 -m compileall -q skills/audio-tldr/scripts scripts
       - run: python3 -m pytest tests -q
+
+  test-floor:
+    # The README promises Python 3.10+; run the whole suite on the floor.
+    runs-on: ubuntu-latest
+    container: python:3.10-slim
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: pip install --no-cache-dir pytest "pypinyin>=0.50" "jellyfish>=1.0"
+      - run: python -m compileall -q skills/audio-tldr/scripts scripts
+      - run: python -m pytest tests -q
+
+  cache-windows:
+    # os.replace / os.utime / file encodings behave differently on Windows,
+    # and the cache must survive upgrades there too. Only the cache tests run.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: pip install pytest "pypinyin>=0.50" "jellyfish>=1.0"
+      - run: python -m pytest tests/test_cache.py -q
+      # transcript.txt is CRLF on Windows; the corrected copy must keep those
+      # line endings or its hash never matches (2026-10-11 real-path run)
+      - run: python -m pytest tests/test_correct.py -q -k crlf
+      # stdout must be UTF-8 even when the console code page is not
+      - run: python -m pytest tests/test_transcribe.py -q -k legacy_code_page

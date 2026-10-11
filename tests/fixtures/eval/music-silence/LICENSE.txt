@@ -1,0 +1,4 @@
+Source: https://archive.org/details/art_of_war_chinese_1506_librivox, file artofwar_01_sun_64kb.mp3, 23.4s for 8.1s (the first sentence of chapter 1).
+LibriVox recording, dedicated to the public domain
+(https://creativecommons.org/publicdomain/mark/1.0/). Text: public domain.
+Tones, noise and silence generated with ffmpeg's lavfi sources for this repository (MIT).

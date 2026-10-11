@@ -26,6 +26,8 @@ import pytest
 
 from scripts import release
 
+ROOT = release.ROOT
+
 
 READMES = sorted(release.READMES.items(), key=lambda kv: kv[1])
 README_IDS = [lang for _, lang in READMES]
@@ -90,3 +92,75 @@ def test_skill_md_points_feedback_to_github_issues():
     assert "## Feedback" in text
     feedback = text.split("## Feedback", 1)[1]
     assert f"{REPO_URL}/issues" in feedback
+
+
+def test_security_md_supported_version_matches_plugin_version():
+    stated = release.stated_security_series(release.read(release.SECURITY_MD))
+    expected = release.supported_series(release.plugin_version())
+    assert stated == expected, (
+        f"SECURITY.md supports {stated}.x but the current release is "
+        f"{release.plugin_version()}; the supported row must be {expected}.x"
+    )
+
+
+def test_skill_documents_the_correction_phase():
+    t = (ROOT / "skills" / "audio-tldr" / "SKILL.md").read_text(encoding="utf-8")
+    for needle in ("## Phase 1.8 — Correct", 'correct.py" check', 'correct.py" apply',
+                   'correct.py" subtitle', 'correct.py" ollama', "prompts/correct.md",
+                   "corrected_path", '--edits "<that file>"', "unavailable"):
+        assert needle in t, needle
+
+
+def test_skill_passes_the_same_context_to_every_correct_call():
+    t = (ROOT / "skills" / "audio-tldr" / "SKILL.md").read_text(encoding="utf-8")
+    for sub in ("check", "apply", "subtitle", "ollama"):
+        line = next(l for l in t.splitlines() if f'correct.py" {sub}' in l)
+        assert '--context "<context_path>"' in line, sub
+
+
+def test_readmes_document_transcript_correction():
+    for name, needles in (("README.md", ("## Transcript correction", "pip install pypinyin jellyfish",
+                                         "transcript.corrected.txt", "corrections.json", "usage.jsonl")),
+                          ("README.zh-TW.md", ("## 逐字稿校正", "pip install pypinyin jellyfish",
+                                               "transcript.corrected.txt", "corrections.json",
+                                               "usage.jsonl"))):
+        t = (ROOT / name).read_text(encoding="utf-8")
+        for n in needles:
+            assert n in t, (name, n)
+
+
+def test_security_policy_covers_transcript_correction():
+    t = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
+    assert "Transcript correction" in t and "untrusted" in t
+
+
+def test_ci_installs_the_correction_packages():
+    # .gitea/ and internal/ are not published; the GitHub tree runs this suite without them.
+    workflows = [".github/workflows/ci.yml"]
+    if (ROOT / ".gitea").is_dir():
+        workflows.append(".gitea/workflows/ci.yml")
+    for wf in workflows:
+        t = (ROOT / wf).read_text(encoding="utf-8")
+        assert '"pypinyin>=0.50"' in t and '"jellyfish>=1.0"' in t, wf
+
+
+@pytest.mark.skipif(not (ROOT / "internal").is_dir(), reason="internal/ is not published")
+def test_adr_0004_exists():
+    assert (ROOT / "internal" / "adr" / "0004-derived-cache-files-are-recomputable.md").is_file()
+
+
+def test_skill_md_long_transcript_instructions_are_doable():
+    t = (ROOT / "skills" / "audio-tldr" / "SKILL.md").read_text(encoding="utf-8")
+    assert "50k words" not in t and "--tail" in t and "--whole-text" in t and "offset" in t
+
+
+def test_readmes_document_long_transcripts():
+    for name, needles in (("README.md", ("AUDIO_TLDR_OLLAMA_NUM_CTX", "sections")),
+                          ("README.zh-TW.md", ("AUDIO_TLDR_OLLAMA_NUM_CTX", "分段"))):
+        t = (ROOT / name).read_text(encoding="utf-8")
+        for n in needles:
+            assert n in t, (name, n)
+
+
+def test_security_policy_covers_section_notes():
+    assert "section notes" in (ROOT / "SECURITY.md").read_text(encoding="utf-8").lower()

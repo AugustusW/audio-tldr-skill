@@ -4,6 +4,103 @@ All notable changes to this project are documented here. **Every release bumps `
 `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` (kept identical) and adds an
 entry below.**
 
+## [Unreleased]
+
+1.0 is the first release with a compatibility promise: what lives on your disk (the transcript
+cache, the glossary, `config.json` and `~/.config/audio-tldr/`) keeps working across every 1.x
+release, and going back to 0.9.x still finds cached entries. See
+[Compatibility](./README.md#compatibility).
+
+### Added
+
+- **Cache format v1.** `meta.json` gains `schema_version`, `cached_date` (with time zone) and a
+  `files` map of names inside the entry folder. Every file is looked up inside its own entry
+  folder, so moving or copying the whole cache keeps every entry working. An entry from 0.9.x is
+  upgraded the first time 1.x uses it, with an atomic write that keeps its modification time; the
+  absolute `*_path` keys are kept and refreshed so 0.9.x can still read it after a downgrade.
+  Tested three ways: a frozen cache written by the real v0.9.1, moved and copied caches, and the
+  v0.9.1 scripts reading a cache that 1.x upgraded (run by `scripts/release.py` before every
+  release).
+- **First-use notice about stored transcripts.** Until it has been shown once, `transcribe.py`
+  adds `retention_notice` to its output; the skill tells the user once where transcripts are kept,
+  that they are kept forever by default, and how `--set-retention` changes that, then runs
+  `--ack-retention-notice`.
+- **`scripts/asr_eval.py`**, a transcription regression tool (character error rate, name recall,
+  hallucinated or repeated lines) with public-domain samples, used to measure every quality change
+  in this release. It is a development tool, not part of the skill.
+- **Transcript correction (Phase 1.8).** Before each digest of a Chinese or English transcript, a
+  model proposes corrections for words that sound like the right ones; the new
+  `scripts/correct.py` checks each by sound (`pypinyin` for Chinese, `jellyfish` metaphone for
+  English), limits them (24 characters, unique place, a number character only replaced by one with
+  the identical reading, tones ignored, 5% of the text or 24 characters in total, whichever is
+  larger), rebuilds the text, and verifies it independently before keeping it. The corrected copy
+  (`transcript.corrected.txt`, with `corrections.json`) is cached next to the transcript and
+  reused; the original transcript is never changed. Subcommands: `check`, `apply`, `subtitle`
+  (corrected `.srt`/`.vtt`), `ollama` (local model, errors stop instead of falling back). Both
+  packages are optional (`pip install pypinyin jellyfish`); without one, that language is not
+  corrected. The derived files are recomputable, so they are not part of the cache-hit promise.
+  Measured on two Chinese podcast clips (about 22 minutes, no glossary), with the show author
+  included in the reference and the instructions tightened after earlier measurements; numbers are
+  from the latest re-run. Pooled CER 6.23% to 5.10-5.18% (mlx-whisper transcript) and 7.35% to
+  6.56-6.82% (faster-whisper) with `claude`, 3 runs each; names written correctly 13 to 29-32 and
+  21 to 30-32 of 33 (partly because the author names are now in the reference). These two clips
+  only; the references were proofread from two models' drafts.
+- **Usage log.** Each correction and each digest appends one line to `usage.jsonl` in the cache
+  folder (`correct.py usage`; the Ollama paths record their own `prompt_eval_count` /
+  `eval_count`, and `digest.py` takes `--usage-entry`). Fields are whitelisted, unreported numbers
+  are `null`, and `--force` keeps the file. Correction also accepts a recorded language given as
+  a region tag (`zh-TW`) or a name (`Chinese`), as whisper.cpp and openai-whisper store it.
+
+### Fixed
+
+- Windows: text files from older versions written in the system code page (for example cp950)
+  are read correctly; new files are written as UTF-8.
+- Windows: every script printed its JSON in the console code page (cp950 on Traditional Chinese systems) unless `PYTHONUTF8` was set, so an agent reading it as UTF-8 got garbled titles, paths and `digest.py --tail` text. The scripts now switch stdout and stderr to UTF-8 at startup.
+- Windows: the corrected transcript (`transcript.corrected.txt`) and corrected subtitles were written with doubled carriage returns (`\r\r\n`), so their hash never matched and `correct.py check` stayed `pending` — every digest re-ran the correction and subtitles never got the fixes. Both are now written with the source's own line endings; an existing broken copy is recomputed once.
+- Windows: switching interpreters (`AUDIO_TLDR_PYTHON`, or finding the backend / sound checkers in another Python) left the caller with empty output and exit 0, because `os.execv` on Windows starts a child and ends the parent. The switch now runs the child and returns its output and exit code.
+- **Ollama digest of a long transcript only read the end.** With Ollama 0.33.2 (measured), the default 8192
+  context dropped the beginning of anything longer.
+- **Subagent digest of a long transcript only read the beginning.** A single-line transcript
+  cannot be read in pages.
+
+### Verified before release
+
+On macOS and in Codex the agent used the release candidate as a user would, reading SKILL.md and
+deciding how to call the scripts; on Windows, Claude Code ran the same steps from a written
+checklist. Fixed list: download a 3-minute video, transcribe, digest, `.srt`; a second
+digest with another template from the cache; `.vtt` from the cache.
+
+- **macOS** (Claude Code, mlx-whisper, 2026-10-11): all steps passed. Transcript correction ran
+  end to end (3 edits accepted, the original transcript unchanged). The run found that
+  `correct.py` did not switch to the Python that has the sound checkers; fixed before release.
+- **Windows 11** (faster-whisper on CUDA, 2026-10-11): in Claude Code, all steps passed; in
+  Codex, a clean first run (download, transcription, correction, digest, `.srt`) and a second
+  digest from the cache passed. Codex, given a 2-hour transcript, noticed its read was truncated
+  and re-read from that point; all three markers and the last line were found. The runs found the
+  three Windows problems listed under Fixed: the interpreter switch and the corrected-copy line
+  endings were re-checked on that machine after the fix; the UTF-8 output fix is covered by the
+  Windows CI job.
+- **Unattended use** (a nightly job that calls the scripts directly): one episode transcribed,
+  corrected (10 edits accepted) and digested from the corrected copy.
+
+### Changed
+
+- **Minimum Python is now 3.10** (was 3.9; 3.9 reached end of life in October 2025). macOS's built-in `python3` is 3.9: use a Homebrew or uv Python for the skill. CI runs the full suite on 3.10 as well as 3.12, so the floor stays tested.
+- Ollama digest: the section and merge requests send `think: false` (a thinking model such as gemma4 otherwise spends the reply limit on thinking and the run exits 2); every request's reply limit is the context left after its prompt, at least 4096 tokens.
+- `transcript.txt` has one segment per line. A transcript cached by an older version gets line
+  breaks inserted the first time it is read (no character changes, ADR-0005); the corrected copy
+  from the correction step is therefore recomputed once. Only strict UTF-8 without a BOM is
+  upgraded; a BOM or non-UTF-8 cache is left as it is and still reads as one line.
+- Ollama digest, subtitle input: bracketed `[MM:SS]` / `[H:MM:SS]` timestamps in the digest
+  that do not appear in the subtitle are removed before output (a stderr note gives the count).
+  Plain-text input is not filtered; other forms (ranges, parentheses) are not checked.
+- `digest.py --whole-text`: a transcript that does not fit in one request stops with an error
+  instead of being digested in sections.
+- `AUDIO_TLDR_OLLAMA_NUM_CTX` sets the Ollama context size (default 32768 or the model's limit,
+  whichever is smaller).
+- `digest.py --tail PATH` prints the last 12 non-whitespace characters of a file (across line breaks), used to check
+  that a subagent read to the end: its `Last text:` copy, with whitespace removed, must end with it.
+
 ## [0.9.1] - 2026-10-06
 
 ### Fixed
