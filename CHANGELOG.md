@@ -4,7 +4,7 @@ All notable changes to this project are documented here. **Every release bumps `
 `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` (kept identical) and adds an
 entry below.**
 
-## [Unreleased]
+## [1.0.0] - 2026-10-11
 
 1.0 is the first release with a compatibility promise: what lives on your disk (the transcript
 cache, the glossary, `config.json` and `~/.config/audio-tldr/`) keeps working across every 1.x

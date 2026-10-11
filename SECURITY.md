@@ -7,7 +7,7 @@ patched — please update to the latest release.
 
 | Version       | Supported          |
 |---------------|--------------------|
-| latest `0.9.x`| ✅                  |
+| latest `1.x`| ✅                  |
 | older         | ❌ (please update) |
 
 ## Reporting a vulnerability
