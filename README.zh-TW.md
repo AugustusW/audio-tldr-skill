@@ -80,7 +80,17 @@ cp -r audio-tldr-skill/skills/audio-tldr ~/.claude/skills/
 
 **方式 C——Codex CLI / ChatGPT app：**
 
-本 skill 採開放 SKILL.md 標準，Codex 可直接使用。把 skill 資料夾複製進 Codex 的 skills 目錄：
+本 skill 採開放 SKILL.md 標準，Codex 可直接使用。Codex 的 plugin 指令讀同一個 marketplace
+（在終端機執行，不是在 Codex 對話裡）：
+
+```bash
+codex plugin marketplace add AugustusW/audio-tldr-skill
+codex plugin add audio-tldr@audio-tldr-skill
+```
+
+這樣裝的 skill 名稱是 `audio-tldr:audio-tldr`（以 codex-cli 0.162.1 確認過：裝得起來、Codex
+列得出這個 skill；1.0 發版前的 Codex 端到端實測用的是下面的複製方式）。或者把 skill 資料夾複製進
+Codex 的 skills 目錄：
 
 ```bash
 git clone https://github.com/AugustusW/audio-tldr-skill.git

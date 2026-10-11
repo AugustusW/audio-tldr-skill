@@ -82,8 +82,17 @@ Invoke with `/audio-tldr:audio-tldr`. Both options can coexist — plugin skills
 
 **Option C — Codex CLI / ChatGPT app:**
 
-The skill follows the open SKILL.md standard, so it works in Codex as-is. Copy the skill
-folder into Codex's skills directory:
+The skill follows the open SKILL.md standard, so it works in Codex as-is. Codex's plugin
+command reads the same marketplace (run these in a terminal, not inside a Codex session):
+
+```bash
+codex plugin marketplace add AugustusW/audio-tldr-skill
+codex plugin add audio-tldr@audio-tldr-skill
+```
+
+Installed this way, the skill is listed as `audio-tldr:audio-tldr` (checked with codex-cli
+0.162.1: installs, and Codex lists the skill; the end-to-end Codex runs before 1.0 used the copy
+below). Or copy the skill folder into Codex's skills directory:
 
 ```bash
 git clone https://github.com/AugustusW/audio-tldr-skill.git
