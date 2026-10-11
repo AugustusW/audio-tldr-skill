@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import locale
 import os
 import re
 import shutil
@@ -15,6 +16,7 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
+from typing import Optional
 from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
 
 TRACKING_PARAMS = frozenset({
@@ -63,6 +65,315 @@ def cache_key(source: str) -> str:
 def cache_dir() -> Path:
     base = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
     return Path(base) / "audio-tldr"
+
+
+# ── Cache entry schema (v1.0) ───────────────────────────────────────
+# Files are always looked up inside the entry folder by these fixed names.
+# meta.json's absolute *_path values are kept (and refreshed) only so that
+# v0.9.x can still read an entry after a downgrade; v1 never reads them,
+# so a copied cache cannot reach back into the old folder and a tampered
+# meta.json cannot point outside its own entry.
+SCHEMA_VERSION = 1
+ENTRY_FILES = {
+    "transcript": "transcript.txt",
+    "segments": "segments.json",
+    "srt": "transcript.srt",
+    "vtt": "transcript.vtt",
+    "audio": "audio.mp3",
+}
+PATH_KEYS = {
+    "transcript": "transcript_path",
+    "segments": "segments_path",
+    "srt": "srt_path",
+    "vtt": "vtt_path",
+    "audio": "audio_path",
+}
+V1_ONLY_KEYS = ("schema_version", "cached_date", "files")
+
+# Files correct.py derives from the transcript. Kept out of ENTRY_FILES on
+# purpose: those are recorded in meta["files"] and promised to hit on every
+# 1.x (internal ADR); these are recomputable (internal ADR).
+DERIVED_FILES = {
+    "corrected": "transcript.corrected.txt",
+    "corrected_srt": "transcript.corrected.srt",
+    "corrected_vtt": "transcript.corrected.vtt",
+    "corrections": "corrections.json",
+    "reference": "reference.md",
+    "usage": "usage.jsonl",
+}
+# History, not a derivative of the transcript: a fresh transcription keeps it.
+KEPT_ON_RETRANSCRIBE = {"usage"}
+
+
+def derived_file(d: Path, name: str) -> Path:
+    return Path(d) / DERIVED_FILES[name]
+
+
+USAGE_FIELDS = ("v", "date", "phase", "path", "model", "provider", "fallback", "input",
+                "cache_write", "cache_read", "output", "total", "source")
+
+
+def append_usage(d: Path, data: dict) -> None:
+    """One line in usage.jsonl: whitelisted fields only, anything unreported stays null."""
+    row = {k: data.get(k) for k in USAGE_FIELDS}
+    row["v"] = 1
+    row["date"] = row["date"] or datetime.now(timezone.utc).isoformat()
+    with open(derived_file(d, "usage"), "a", encoding="utf-8") as f:
+        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+# ── Line breaks (v1.0 item 5) ───────────────────────────────────────
+# transcript.txt used to be one line: a coding agent's file reader pages by
+# line, so a long single-line transcript was read only up to its first ~20k
+# characters. One Whisper segment per line; a line longer than LINE_MAX is
+# cut at a sentence end, a comma or a space. Only "\n" is ever inserted.
+LINE_MAX = 400
+LINE_MIN_BREAK = 200
+_SENT_END = "。！？!?…"
+_CLOSERS = "」』”’）)]】"
+_SOFT_BREAKS = "，、,;；：:"
+_LOCATE_SLACK = 50
+
+
+def strip_breaks(text: str) -> str:
+    return text.replace("\r", "").replace("\n", "")
+
+
+def segment_ends(text: str, segments, convert=None) -> list:
+    """Positions in `text` just after each segment that can be found, in order.
+    Post-processing (de-repetition, zh conversion) changed some segments, so each
+    is tried as stored and converted; a segment that cannot be found is skipped and
+    its length widens the window for the next one."""
+    ends, pos, skipped = [], 0, 0
+    for seg in segments or []:
+        st = (seg.get("text") or "").strip() if isinstance(seg, dict) else ""
+        if not st:
+            continue
+        cands = [st]
+        if convert:
+            c = convert(st)
+            if c and c != st:
+                cands.append(c)
+        for cand in cands:
+            j = text.find(cand, pos)
+            if j >= 0 and j - pos <= skipped + _LOCATE_SLACK:
+                pos = j + len(cand)
+                ends.append(pos)
+                skipped = 0
+                break
+        else:
+            skipped += len(st)
+    return ends
+
+
+def _is_ascii_alnum(c: str) -> bool:
+    return c.isascii() and c.isalnum()
+
+
+def _long_line_cuts(line: str) -> list:
+    """Cut offsets inside one line longer than LINE_MAX."""
+    cuts, start = [], 0
+    while len(line) - start > LINE_MAX:
+        cut = None
+        for cls in (_SENT_END, _SOFT_BREAKS, " "):
+            for k in range(start + LINE_MIN_BREAK, start + LINE_MAX):
+                if line[k - 1] in cls:
+                    if cls is _SENT_END:
+                        while k < min(len(line) - 1, start + LINE_MAX) and line[k] in _CLOSERS:
+                            k += 1
+                    cut = k
+                    break
+            if cut:
+                break
+        if cut is None:
+            k = start + LINE_MAX
+            while k > start + LINE_MIN_BREAK and _is_ascii_alnum(line[k - 1]) and _is_ascii_alnum(line[k]):
+                k -= 1
+            cut = k if k > start + LINE_MIN_BREAK else start + LINE_MAX
+        cuts.append(cut)
+        start = cut
+    return cuts
+
+
+def wrap_lines(text: str, segments=None, convert=None) -> str:
+    """One segment per line, long lines cut; inserts "\\n" only (never inside "\\r\\n")."""
+    if not text:
+        return text
+    lines = text.split("\n")
+    if len(lines) > 1 and all(len(l.rstrip("\r")) <= LINE_MAX for l in lines):
+        return text
+    ins = set()
+    for b in segment_ends(text, segments, convert):
+        if b < len(text) and text[b] == " ":  # faster-whisper joins segments with a space:
+            b += 1                             # keep it at the end of the line, not the start
+        if 0 < b < len(text) and text[b] not in "\r\n" and text[b - 1] not in "\r\n":
+            ins.add(b)
+    bounds = sorted(ins | {i + 1 for i, c in enumerate(text) if c == "\n"} | {0, len(text)})
+    for a, b in zip(bounds, bounds[1:]):
+        body = text[a:b].rstrip("\r\n")
+        if len(body) > LINE_MAX:
+            ins.update(a + c for c in _long_line_cuts(body) if text[a + c - 1] != "\r")
+    out, prev = [], 0
+    for p in sorted(ins):
+        out.append(text[prev:p])
+        prev = p
+    out.append(text[prev:])
+    return "\n".join(out)
+
+
+def tail_of(text: str, n: int = 12) -> str:
+    """The last n non-whitespace characters of the text, taken across line breaks. (Not "the
+    last line": real transcripts often end in a line of a few characters, and a file that is
+    still one line would give its start.)"""
+    return "".join(text.split())[-n:]
+
+
+def remove_correction_files(d: Path) -> None:
+    """A fresh transcription makes any corrected copy stale."""
+    for name in DERIVED_FILES:
+        if name in KEPT_ON_RETRANSCRIBE:
+            continue
+        try:
+            derived_file(d, name).unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            print(f"warning: could not remove {derived_file(d, name)}: {e}", file=sys.stderr)
+
+REPLACE_RETRIES = 5
+REPLACE_RETRY_DELAY = 0.1
+
+
+def resolve_entry_file(d: Path, name: str) -> Optional[Path]:
+    p = d / ENTRY_FILES[name]
+    return p if p.exists() else None
+
+
+def _read_text(path: Path) -> str:
+    """Text of a file, trying UTF-8 (with or without BOM) first, then the system
+    code page, which is what v0.9.x wrote with on Windows (cp950 on a Traditional
+    Chinese system). locale.getencoding() ignores Python's UTF-8 mode, so it still
+    names the ANSI code page there. Raises OSError, or the last UnicodeDecodeError
+    when no encoding fits; callers that must not crash catch it."""
+    raw = path.read_bytes()
+    getenc = getattr(locale, "getencoding", None)
+    system = getenc() if getenc else locale.getpreferredencoding(False)
+    tried = []
+    err = None
+    for enc in ("utf-8-sig", "utf-8", system):
+        if enc in tried:
+            continue
+        tried.append(enc)
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError as e:
+            err = e
+        except LookupError:
+            continue
+    if err is None:
+        raise UnicodeDecodeError("utf-8", raw, 0, 1, "no usable encoding")
+    raise err
+
+
+def _read_json(path: Path):
+    """Parsed JSON, or None if missing/unreadable (see _read_text for encodings)."""
+    try:
+        return json.loads(_read_text(path))
+    except (OSError, ValueError):
+        return None
+
+
+def _atomic_write_text(path: Path, text: str, mtime_ns: Optional[int] = None,
+                       newline: Optional[str] = None) -> None:
+    """Write via a temp file in the same folder and os.replace, so a concurrent
+    reader sees the old file or the new one, never half of either. The mtime is
+    set after the temp file is closed: Windows updates it on close."""
+    tmp = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+    try:
+        with open(tmp, "w", encoding="utf-8", newline=newline) as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        if mtime_ns is not None:
+            os.utime(tmp, ns=(time.time_ns(), mtime_ns))
+        for attempt in range(REPLACE_RETRIES):
+            try:
+                os.replace(tmp, path)
+                return
+            except PermissionError:
+                if attempt == REPLACE_RETRIES - 1:
+                    raise
+                time.sleep(REPLACE_RETRY_DELAY)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def entry_cached_ts(d: Path, meta: dict) -> float:
+    """When the entry was transcribed: cached_date (v1) -> created (frames-only
+    entries; naive = local time) -> meta.json's mtime (v0)."""
+    for key in ("cached_date", "created"):
+        raw = meta.get(key)
+        if isinstance(raw, str):
+            try:
+                dt = datetime.fromisoformat(raw)
+            except ValueError:
+                continue
+            if dt.tzinfo is None:
+                dt = dt.astimezone()
+            return dt.timestamp()
+    return (d / "meta.json").stat().st_mtime
+
+
+def _same_path(a, b) -> bool:
+    norm = lambda p: os.path.normcase(os.path.realpath(str(p)))
+    return norm(a) == norm(b)
+
+
+def upgrade_meta(d: Path, meta: dict) -> dict:
+    """meta in the v1 shape, with every *_path it already had pointing at this
+    folder. Keys are refreshed or dropped, never added: stdout's key set must
+    stay what v0.9.1 printed."""
+    new = dict(meta)
+    if not isinstance(new.get("cached_date"), str):
+        new["cached_date"] = datetime.fromtimestamp(
+            entry_cached_ts(d, meta), timezone.utc).isoformat()
+    for name, key in PATH_KEYS.items():
+        if key in new:
+            p = resolve_entry_file(d, name)
+            if p is None:
+                new.pop(key)
+            else:
+                new[key] = str(p)
+    new["files"] = {n: f for n, f in ENTRY_FILES.items() if resolve_entry_file(d, n)}
+    new["schema_version"] = SCHEMA_VERSION
+    return new
+
+
+def _needs_rewrite(d: Path, meta: dict) -> bool:
+    if meta.get("schema_version", 0) < SCHEMA_VERSION:
+        return True
+    for name, key in PATH_KEYS.items():
+        if key in meta:
+            p = resolve_entry_file(d, name)
+            if p is None or not _same_path(meta[key], p):
+                return True
+    return False
+
+
+def public_meta(d: Path, meta: dict) -> dict:
+    out = {k: v for k, v in meta.items() if k not in V1_ONLY_KEYS}
+    for name, key in PATH_KEYS.items():
+        if key in out:
+            p = resolve_entry_file(d, name)
+            if p is None:
+                out.pop(key)
+            else:
+                out[key] = str(p)
+    return out
 
 
 class DownloadError(Exception):
@@ -162,6 +473,18 @@ def _module_backend_in(python: str) -> bool:
         return False
 
 
+def _modules_in(python: str, mods) -> dict:
+    """Which of `mods` another interpreter can import (all False if it won't run)."""
+    code = ("import importlib.util as i, json; "
+            f"print(json.dumps({{m: bool(i.find_spec(m)) for m in {list(mods)!r}}}))")
+    try:
+        r = subprocess.run([python, "-c", code], capture_output=True, text=True, timeout=15)
+        found = json.loads(r.stdout) if r.returncode == 0 else {}
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        found = {}
+    return {m: bool(found.get(m)) for m in mods}
+
+
 def _candidate_interpreters():
     cands = []
     env_py = os.environ.get("AUDIO_TLDR_PYTHON")
@@ -184,6 +507,38 @@ def _candidate_interpreters():
     return out
 
 
+_IS_WINDOWS = os.name == "nt"
+
+
+def utf8_stdio():
+    """Print UTF-8 whatever the console code page is. Without PYTHONUTF8, Python on
+    Windows writes stdout in the ANSI code page (cp950 on Traditional Chinese
+    systems), and the JSON every script prints (ensure_ascii=False) reached the
+    agent as mojibake (2026-10-11 Windows run). Called once at each script entry."""
+    for stream in (sys.stdout, sys.stderr):
+        enc = (getattr(stream, "encoding", None) or "").lower().replace("-", "")
+        if enc != "utf8" and hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8")
+            except (ValueError, OSError):
+                pass
+
+
+def _reexec_into(python, script, raw_argv):
+    """Run `script` under another interpreter and end this process.
+
+    POSIX: os.execv replaces the process, so the caller sees the new one's output.
+    Windows: os.execv starts a child and ends the parent at once — the caller gets
+    empty stdout and exit 0 while the child prints later (2026-10-11 real-path
+    run). Run the child, wait, and pass its exit code back instead."""
+    argv = [python, script] + list(raw_argv)
+    if _IS_WINDOWS:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        sys.exit(subprocess.run(argv).returncode)
+    os.execv(python, argv)
+
+
 def _honor_explicit_python(raw_argv):
     """AUDIO_TLDR_PYTHON set -> always run under that interpreter (highest priority)."""
     env_py = os.environ.get("AUDIO_TLDR_PYTHON")
@@ -191,7 +546,7 @@ def _honor_explicit_python(raw_argv):
         return
     if Path(env_py).exists() and os.path.realpath(env_py) != os.path.realpath(sys.executable):
         os.environ[_REEXEC_ENV] = "1"
-        os.execv(env_py, [env_py, os.path.abspath(__file__)] + list(raw_argv))
+        _reexec_into(env_py, os.path.abspath(__file__), raw_argv)
 
 
 def _maybe_reexec(raw_argv):
@@ -206,7 +561,7 @@ def _maybe_reexec(raw_argv):
             os.environ[_REEXEC_ENV] = "1"
             print(f"note: whisper backend found in {cand}; switching interpreter "
                   f"(set AUDIO_TLDR_PYTHON to override)", file=sys.stderr)
-            os.execv(cand, [cand, os.path.abspath(__file__)] + list(raw_argv))
+            _reexec_into(cand, os.path.abspath(__file__), raw_argv)
 
 
 def cmd_doctor() -> int:
@@ -226,6 +581,8 @@ def cmd_doctor() -> int:
             "openai_whisper": bool(shutil.which("whisper")),
         },
         "opencc": _module_available("opencc"),
+        "pypinyin": _module_available("pypinyin"),
+        "jellyfish": _module_available("jellyfish"),
         "selected_backend": detect_backend(),
         "other_interpreters": [],
         "metal": None,
@@ -235,7 +592,8 @@ def cmd_doctor() -> int:
         if os.path.realpath(cand) == cur:
             continue
         info["other_interpreters"].append(
-            {"path": cand, "module_backend": _module_backend_in(cand)})
+            {"path": cand, "module_backend": _module_backend_in(cand),
+             **_modules_in(cand, ("pypinyin", "jellyfish"))})
     if _module_available("mlx_whisper"):
         try:
             r = subprocess.run(
@@ -372,15 +730,66 @@ def resolve_apple_podcast(url: str):
     return media, title, apple_context(r0)
 
 
-def load_cached(key: str):
-    meta_path = cache_dir() / key / "meta.json"
+def upgrade_transcript_lines(d: Path, meta: dict) -> bool:
+    """v1.0 item 5: a single-line transcript cached before 1.0 gets line breaks
+    inserted (nothing else changes; ADR-0005). Gives up quietly on any doubt;
+    no exception escapes, so a cache hit is never blocked by the upgrade."""
     try:
-        meta = json.loads(meta_path.read_text())
-        if Path(meta["transcript_path"]).exists():
-            return meta
-    except (OSError, ValueError, KeyError):
-        pass
-    return None
+        t = resolve_entry_file(d, "transcript")
+        if t is None:
+            return False
+        raw = t.read_bytes()
+        if raw.startswith(b"\xef\xbb\xbf"):
+            return False  # BOM: rewriting as plain UTF-8 would drop it
+        try:
+            text = raw.decode("utf-8")  # strict: legacy code pages are left alone
+        except UnicodeDecodeError:
+            return False
+        if all(len(l.rstrip("\r")) <= LINE_MAX for l in text.split("\n")):
+            return False
+        segs = None
+        seg_path = resolve_entry_file(d, "segments")
+        if seg_path is not None:
+            segs = _read_json(seg_path)
+            segs = segs if isinstance(segs, list) else None
+        lang = meta.get("language") or ""
+        new = wrap_lines(text, segs, lambda s: _maybe_to_traditional(s, lang))
+        if new == text or strip_breaks(new) != strip_breaks(text):
+            return False
+        if hashlib.sha256(t.read_bytes()).digest() != hashlib.sha256(raw).digest():
+            return False  # another process rewrote it (e.g. --force) since we read it
+        _atomic_write_text(t, new, mtime_ns=t.stat().st_mtime_ns, newline="")
+    except Exception as e:
+        print(f"note: could not add line breaks to the cached transcript ({e}); using it as is",
+              file=sys.stderr)
+        return False
+    return True
+
+
+def load_cached(key: str):
+    d = cache_dir() / key
+    meta_path = d / "meta.json"
+    meta = _read_json(meta_path)
+    if not isinstance(meta, dict) or resolve_entry_file(d, "transcript") is None:
+        return None
+    if "transcript_path" not in meta or meta.get("frames_only"):
+        return None  # frames-only stub (frames.py): no transcript was recorded
+    version = meta.get("schema_version", 0)
+    if not isinstance(version, int) or isinstance(version, bool):
+        return None
+    if version > SCHEMA_VERSION:
+        return meta  # written by a newer version: read, never rewrite
+    if _needs_rewrite(d, meta):
+        new = upgrade_meta(d, meta)
+        try:
+            _atomic_write_text(meta_path, json.dumps(new),
+                               mtime_ns=meta_path.stat().st_mtime_ns)
+        except OSError as e:
+            print(f"note: could not update cache entry metadata ({e}); using it as is",
+                  file=sys.stderr)
+        meta = new
+    upgrade_transcript_lines(d, meta)
+    return meta
 
 
 # ── Source context for name correction (v0.9.0) ─────────────────────
@@ -391,6 +800,7 @@ def load_cached(key: str):
 CONTEXT_DESCRIPTION_MAX = 4000
 CONTEXT_CHAPTERS_MAX = 50
 CONTEXT_TAGS_MAX = 30
+CONTEXT_CREATOR_MAX = 200
 CONTEXT_RETRY_DAYS = 7
 CONTEXT_FETCH_TIMEOUT = 30
 
@@ -399,8 +809,26 @@ def _clean_str(value):
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
+def _creator(info, channel):
+    """The show/channel author (host names often live here): creators list,
+    creator, artist, album_artist, then uploader if it isn't the channel."""
+    creators = info.get("creators")
+    if isinstance(creators, list):
+        joined = " ".join(c for c in (_clean_str(x) for x in creators) if c)
+        if joined:
+            return joined
+    for key in ("creator", "artist", "album_artist"):
+        value = _clean_str(info.get(key))
+        if value:
+            return value
+    uploader = _clean_str(info.get("uploader"))
+    if uploader and uploader != channel:
+        return uploader
+    return None
+
+
 def ytdlp_context(info) -> dict:
-    """yt-dlp info dict -> {title, channel, description, chapters, tags},
+    """yt-dlp info dict -> {title, channel, creator, description, chapters, tags},
     omitting anything missing or empty. Channel falls back through uploader,
     then series/album (podcast extractors)."""
     if not isinstance(info, dict):
@@ -414,6 +842,9 @@ def ytdlp_context(info) -> dict:
         if channel:
             ctx["channel"] = channel
             break
+    creator = _creator(info, ctx.get("channel"))
+    if creator:
+        ctx["creator"] = creator[:CONTEXT_CREATOR_MAX].strip()
     desc = _clean_str(info.get("description"))
     if desc:
         ctx["description"] = desc[:CONTEXT_DESCRIPTION_MAX]
@@ -437,18 +868,19 @@ def apple_context(r0) -> dict:
         return {}
     return ytdlp_context({"title": r0.get("trackName"),
                           "channel": r0.get("collectionName"),
+                          "creator": r0.get("artistName"),
                           "description": r0.get("description")})
 
 
 def write_context(d: Path, ctx: dict) -> None:
-    (d / "context.json").write_text(json.dumps(ctx, ensure_ascii=False))
+    (d / "context.json").write_text(json.dumps(ctx), encoding="utf-8")
 
 
 def _read_context_file(d: Path):
     """The parsed context.json dict, or None if absent/unreadable/not a dict."""
     try:
-        data = json.loads((d / "context.json").read_text())
-    except (OSError, ValueError):
+        data = _read_json(d / "context.json")
+    except OSError:
         return None
     return data if isinstance(data, dict) else None
 
@@ -514,7 +946,7 @@ def _backfill_context(d: Path, source: str) -> None:
             write_context(d, ctx)
             return
         (d / "context.json").write_text(json.dumps(
-            {"unavailable": True, "checked_date": datetime.now(timezone.utc).isoformat()}))
+            {"unavailable": True, "checked_date": datetime.now(timezone.utc).isoformat()}), encoding="utf-8")
         when = f"after {CONTEXT_RETRY_DAYS} days"
     except OSError:
         when = "on the next run"
@@ -529,15 +961,13 @@ def config_path() -> Path:
 
 
 def load_config() -> dict:
-    try:
-        return json.loads(config_path().read_text())
-    except (OSError, ValueError):
-        return {}
+    cfg = _read_json(config_path())
+    return cfg if isinstance(cfg, dict) else {}
 
 
 def save_config(cfg: dict):
     cache_dir().mkdir(parents=True, exist_ok=True)
-    config_path().write_text(json.dumps(cfg))
+    _atomic_write_text(config_path(), json.dumps(cfg))
 
 
 def _iter_entries():
@@ -549,15 +979,34 @@ def _iter_entries():
             yield sub
 
 
+TEMP_MAX_AGE = 3600
+
+
+def _clean_stale_temps() -> None:
+    """Leftovers of an interrupted _atomic_write_text. Done here, not in
+    _iter_entries(), so read-only commands like --cache-info never delete."""
+    cutoff = time.time() - TEMP_MAX_AGE
+    for sub in _iter_entries():
+        for tmp in sub.glob(".meta.json.tmp-*"):
+            try:
+                if tmp.stat().st_mtime < cutoff:
+                    tmp.unlink()
+            except OSError:
+                pass
+
+
 def prune_expired() -> int:
-    """Delete entries older than the configured retention. No config -> no-op."""
+    """Delete entries older than the configured retention. No config -> no-op
+    (apart from clearing stale temp files)."""
+    _clean_stale_temps()
     days = load_config().get("retention_days")
     if not days:
         return 0
     cutoff = time.time() - days * 86400
     n = 0
     for sub in list(_iter_entries()):
-        if (sub / "meta.json").stat().st_mtime < cutoff:
+        meta = _read_json(sub / "meta.json")
+        if entry_cached_ts(sub, meta if isinstance(meta, dict) else {}) < cutoff:
             shutil.rmtree(sub, ignore_errors=True)
             n += 1
     return n
@@ -566,9 +1015,8 @@ def prune_expired() -> int:
 def cmd_cache_info() -> int:
     entries, total = [], 0
     for sub in _iter_entries():
-        try:
-            meta = json.loads((sub / "meta.json").read_text())
-        except ValueError:
+        meta = _read_json(sub / "meta.json")
+        if not isinstance(meta, dict):
             meta = {}
         size = sum(f.stat().st_size for f in sub.rglob("*") if f.is_file())
         total += size
@@ -577,7 +1025,7 @@ def cmd_cache_info() -> int:
             "title": meta.get("title", ""),
             "source": meta.get("source", ""),
             "cached_date": datetime.fromtimestamp(
-                (sub / "meta.json").stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
+                entry_cached_ts(sub, meta)).strftime("%Y-%m-%d %H:%M"),
             "size_bytes": size,
         })
     print(json.dumps({
@@ -597,12 +1045,9 @@ def cmd_clear(source: str) -> int:
         pass  # local file no longer exists -> fall back to meta.source match
     if target is None or not target.exists():
         for sub in _iter_entries():
-            try:
-                if json.loads((sub / "meta.json").read_text()).get("source") == source:
-                    target = sub
-                    break
-            except ValueError:
-                continue
+            if (_read_json(sub / "meta.json") or {}).get("source") == source:
+                target = sub
+                break
     if target is not None and target.exists():
         shutil.rmtree(target, ignore_errors=True)
         print(f"cleared: {source}")
@@ -627,6 +1072,7 @@ def cmd_set_retention(value: str) -> int:
     cfg = load_config()
     if value.lower() in ("off", "0", "none"):
         cfg.pop("retention_days", None)
+        cfg["retention_notice_shown"] = True
         save_config(cfg)
         print("retention disabled — cache is kept forever")
         return 0
@@ -638,8 +1084,30 @@ def cmd_set_retention(value: str) -> int:
         print(f"invalid retention: {value!r} (positive integer days, or 'off')", file=sys.stderr)
         return 2
     cfg["retention_days"] = days
+    cfg["retention_notice_shown"] = True
     save_config(cfg)
     print(f"retention set: cache entries older than {days} days are pruned on next run")
+    return 0
+
+
+def retention_notice():
+    """The one-time notice, or None once acknowledged."""
+    cfg = load_config()
+    if cfg.get("retention_notice_shown"):
+        return None
+    return {"cache_dir": str(cache_dir()), "retention_days": cfg.get("retention_days")}
+
+
+def cmd_ack_retention_notice() -> int:
+    p = config_path()
+    if p.exists() and not isinstance(_read_json(p), dict):
+        print(f"config {p} is unreadable; not overwriting it — fix or delete it "
+              "(the retention notice keeps appearing until then)", file=sys.stderr)
+        return 2
+    cfg = load_config()
+    cfg["retention_notice_shown"] = True
+    save_config(cfg)
+    print("retention notice acknowledged")
     return 0
 
 
@@ -874,7 +1342,7 @@ def _parse_whisper_cpp_json(json_path: Path):
     {"from": ms, "to": ms}, "text": ...}, ...]}. Returns None on any I/O or
     shape problem — callers treat that the same as "backend gave nothing"."""
     try:
-        data = json.loads(json_path.read_text())
+        data = json.loads(_read_text(json_path))
     except (OSError, ValueError):
         return None
     out = []
@@ -892,7 +1360,7 @@ def _parse_openai_whisper_json(json_path: Path):
     """openai-whisper --output_format json writes {"text": ..., "segments":
     [{"start": sec, "end": sec, "text": ...}, ...], "language": ...}."""
     try:
-        data = json.loads(json_path.read_text())
+        data = json.loads(_read_text(json_path))
     except (OSError, ValueError):
         return None
     out = []
@@ -953,7 +1421,7 @@ def _run_backend(backend, audio_path, language, model_name=None, want_segments=F
             if want_segments:
                 cmd += ["--output-json"]
             subprocess.run(cmd, capture_output=True, check=True, timeout=7200)
-            text = Path(wav + ".txt").read_text().strip()
+            text = _read_text(Path(wav + ".txt")).strip()
             segments = _parse_whisper_cpp_json(Path(wav + ".json")) if want_segments else None
             return text, 0.0, language or "", segments
         finally:
@@ -972,7 +1440,7 @@ def _run_backend(backend, audio_path, language, model_name=None, want_segments=F
                 cmd += ["--initial_prompt", zh_prompt]
             subprocess.run(cmd, capture_output=True, check=True, timeout=7200)
             txts = sorted(Path(outdir).glob("*.txt"))
-            text = txts[0].read_text().strip()
+            text = _read_text(txts[0]).strip()
             segments = None
             if want_segments:
                 jsons = sorted(Path(outdir).glob("*.json"))
@@ -981,6 +1449,39 @@ def _run_backend(backend, audio_path, language, model_name=None, want_segments=F
         finally:
             shutil.rmtree(outdir, ignore_errors=True)
     raise ValueError(f"unknown backend {backend}")
+
+
+def transcribe_audio(audio_path, backend, language=None, model=None,
+                     want_segments=False, **options):
+    """Transcription plus the post-processing main() caches, as one call, so
+    scripts/asr_eval.py measures exactly what users get. `options` is where
+    backend tuning (VAD, prompt carry-over, hotwords) arrives in v1.0 ③."""
+    if options:
+        raise TypeError(f"unsupported transcription options: {sorted(options)}")
+    t0 = time.monotonic()
+    # mlx-whisper / faster-whisper hand over segments for free, and the cached
+    # transcript is written one segment per line; whisper-cpp / openai-whisper
+    # already emit one line per segment in their .txt.
+    ask = want_segments or backend in ("mlx-whisper", "faster-whisper")
+    raw_text, duration, lang, segments = _run_backend(
+        backend, audio_path, language, model, want_segments=ask)
+    backend_seconds = round(time.monotonic() - t0, 2)
+    t1 = time.monotonic()
+    collapsed = _collapse_repetitions(raw_text)
+    text = _maybe_to_traditional(collapsed, lang)
+    text = wrap_lines(text, segments, lambda s: _maybe_to_traditional(s, lang))
+    display = ([{**s, "text": _maybe_to_traditional(s["text"], lang)} for s in segments]
+               if segments else None)
+    if not want_segments:  # callers only get segments they asked for
+        segments = display = None
+    return {
+        "raw_text": raw_text, "text": text,
+        "collapsed_chars": len(raw_text) - len(collapsed),
+        "segments": segments, "display_segments": display,
+        "duration": duration, "language": lang,
+        "backend_seconds": backend_seconds,
+        "postprocess_seconds": round(time.monotonic() - t1, 2),
+    }
 
 
 def _ensure_subtitle(d: Path, meta: dict, fmt: str):
@@ -993,14 +1494,16 @@ def _ensure_subtitle(d: Path, meta: dict, fmt: str):
     sub_path = d / f"transcript.{fmt}"
     if sub_path.exists():
         return str(sub_path), None
-    seg_path = meta.get("segments_path")
-    if not seg_path or not Path(seg_path).exists():
+    seg_path = resolve_entry_file(d, "segments")
+    if seg_path is None:
         return None, (
             f"cached transcript has no segment timestamps for --format {fmt} "
             "(cached before subtitle export was added, or last transcribed with "
             f"--format txt) — re-run with --force --format {fmt} to regenerate with timestamps")
     try:
-        segments = json.loads(Path(seg_path).read_text())
+        segments = _read_json(seg_path)
+        if not isinstance(segments, list):
+            raise ValueError("segments.json is not a list")
     except (OSError, ValueError):
         return None, (
             f"cached segments.json is unreadable — re-run with --force --format {fmt} "
@@ -1008,7 +1511,7 @@ def _ensure_subtitle(d: Path, meta: dict, fmt: str):
     lang = meta.get("language")
     segments = [{**s, "text": _maybe_to_traditional(s["text"], lang)} for s in segments]
     content = format_srt(segments) if fmt == "srt" else format_vtt(segments)
-    sub_path.write_text(content)
+    sub_path.write_text(content, encoding="utf-8")
     return str(sub_path), None
 
 
@@ -1031,6 +1534,9 @@ def main(argv=None):
     ap.add_argument("--yes", action="store_true", help="confirm --clear-all")
     ap.add_argument("--set-retention", metavar="DAYS",
                     help="auto-prune entries older than DAYS on each run; 'off' = keep forever (default)")
+    ap.add_argument("--ack-retention-notice", action="store_true",
+                    help="record that the user was told where transcripts are kept "
+                         "(stops the retention_notice field)")
     ap.add_argument("--keep-audio", action="store_true",
                     help="keep the downloaded audio in the cache entry instead of deleting it (URL sources)")
     ap.add_argument("--doctor", action="store_true",
@@ -1052,6 +1558,8 @@ def main(argv=None):
         return cmd_clear_all(args.yes)
     if args.set_retention:
         return cmd_set_retention(args.set_retention)
+    if args.ack_retention_notice:
+        return cmd_ack_retention_notice()
 
     if not args.source:
         ap.print_usage(sys.stderr)
@@ -1084,13 +1592,16 @@ def main(argv=None):
                     print(err, file=sys.stderr)
                     return 2
                 meta = {**meta, f"{args.format}_path": sub_path}
-            if args.keep_audio and not meta.get("audio_path"):
+            if args.keep_audio and not resolve_entry_file(d, "audio"):
                 print("note: --keep-audio ignored on cache hit (transcript already cached; "
                       "re-run with --force to download and keep the audio)", file=sys.stderr)
-            out = {**meta, "cache_hit": True}
+            out = {**public_meta(d, meta), "cache_hit": True}
             cp = context_path_for(d)
             if cp:
                 out["context_path"] = cp
+            notice = retention_notice()
+            if notice:
+                out["retention_notice"] = notice
             print(json.dumps(out, ensure_ascii=False))
             return 0
 
@@ -1138,12 +1649,13 @@ def main(argv=None):
                 title = ep_title or dl_title
         # Download wall-clock (URL sources only; includes the Apple-fallback retry).
         download_seconds = round(time.monotonic() - dl_t0, 2) if tmpdir else None
-        t_backend = time.monotonic()
-        text, duration, lang, segments = _run_backend(
-            backend, audio_path, args.language, args.model, want_segments=want_segments)
+        res = transcribe_audio(audio_path, backend, args.language, args.model,
+                               want_segments=want_segments)
+        text, duration, lang, segments = (
+            res["raw_text"], res["duration"], res["language"], res["segments"])
         # Wall-clock of the transcription call only (download/NAS-style side steps
         # excluded), so duration / processing_seconds gives the backend's realtime factor.
-        processing_seconds = round(time.monotonic() - t_backend, 2)
+        processing_seconds = res["backend_seconds"]
         if args.keep_audio and tmpdir:
             # Audio retention is an optional side-effect: its failure must never
             # discard the (potentially expensive) transcription that already succeeded.
@@ -1171,19 +1683,17 @@ def main(argv=None):
         if tmpdir:
             shutil.rmtree(tmpdir, ignore_errors=True)
 
-    post_t0 = time.monotonic()
-    deduped = _collapse_repetitions(text)
-    if deduped != text:
-        print(f"note: collapsed repeated phrases ({len(text) - len(deduped)} chars removed — "
+    if res["collapsed_chars"]:
+        print(f"note: collapsed repeated phrases ({res['collapsed_chars']} chars removed — "
               f"likely whisper tail hallucination; AUDIO_TLDR_DEREPEAT=off to disable)",
               file=sys.stderr)
-        text = deduped
-    text = _maybe_to_traditional(text, lang)
-    postprocess_seconds = round(time.monotonic() - post_t0, 2)
+    text = res["text"]
+    postprocess_seconds = res["postprocess_seconds"]
     w_t0 = time.monotonic()
     d.mkdir(parents=True, exist_ok=True)
     t_path = d / "transcript.txt"
-    t_path.write_text(text)
+    remove_correction_files(d)
+    t_path.write_text(text, encoding="utf-8")
     if context:
         # Only a fresh fetch replaces it: a --force re-run that found nothing
         # keeps the details an earlier run did find. Like --keep-audio, an
@@ -1216,11 +1726,11 @@ def main(argv=None):
             # *other* subtitle format reformats from this instead of re-transcribing.
             w_t1 = time.monotonic()
             seg_path = d / "segments.json"
-            seg_path.write_text(json.dumps(segments, ensure_ascii=False))
-            zh_segments = [{**s, "text": _maybe_to_traditional(s["text"], lang)} for s in segments]
+            seg_path.write_text(json.dumps(segments))
+            zh_segments = res["display_segments"]
             content = format_srt(zh_segments) if args.format == "srt" else format_vtt(zh_segments)
             sub_path = d / f"transcript.{args.format}"
-            sub_path.write_text(content)
+            sub_path.write_text(content, encoding="utf-8")
             write_acc += time.monotonic() - w_t1
             meta["segments_path"] = str(seg_path)
             meta[f"{args.format}_path"] = str(sub_path)
@@ -1240,17 +1750,24 @@ def main(argv=None):
         "postprocess": postprocess_seconds,
         "write": round(write_acc, 2),
     }
-    (d / "meta.json").write_text(json.dumps(meta, ensure_ascii=False))
+    meta["schema_version"] = SCHEMA_VERSION
+    meta["cached_date"] = datetime.now(timezone.utc).isoformat()
+    meta["files"] = {n: f for n, f in ENTRY_FILES.items() if resolve_entry_file(d, n)}
+    _atomic_write_text(d / "meta.json", json.dumps(meta))
     if sub_error:
         print(sub_error, file=sys.stderr)
         return 2
-    out = {**meta, "cache_hit": False}
+    out = {**public_meta(d, meta), "cache_hit": False}
     cp = context_path_for(d)
     if cp:
         out["context_path"] = cp
+    notice = retention_notice()
+    if notice:
+        out["retention_notice"] = notice
     print(json.dumps(out, ensure_ascii=False))
     return 0
 
 
 if __name__ == "__main__":
+    utf8_stdio()
     sys.exit(main())

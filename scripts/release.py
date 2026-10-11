@@ -25,10 +25,14 @@ docs. `tests/test_docs.py` imports the patterns from here rather than keeping
 its own copy, because two copies of a rule are two rules that drift apart.
 """
 import argparse
+import io
 import json
+import os
 import re
 import subprocess
 import sys
+import tarfile
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -37,6 +41,17 @@ MARKETPLACE_JSON = ROOT / ".claude-plugin" / "marketplace.json"
 CHANGELOG = ROOT / "CHANGELOG.md"
 README_EN = ROOT / "README.md"
 README_ZH = ROOT / "README.zh-TW.md"
+SECURITY_MD = ROOT / "SECURITY.md"
+
+# The supported-versions row: "| latest `0.9.x`|" before 1.0, "| latest `1.x`|"
+# after. Pre-1.0 every minor can break things, so the series is major.minor;
+# from 1.0 on it is the major.
+SECURITY_VERSION_RE = re.compile(r"(\|\s*latest\s+`)(\d+(?:\.\d+)?)(\.x`)")
+
+# The version whose cache format 1.x promises to stay readable by (downgrade).
+# Its scripts are exported from this tag and run against an entry 1.x upgraded.
+LEGACY_TAG = "v0.9.1"
+LEGACY_SCRIPTS = "skills/audio-tldr/scripts"
 
 # Which language each README's sentences are in, for the test-count patterns.
 READMES = {README_EN: "en", README_ZH: "zh"}
@@ -207,6 +222,24 @@ def preflight(version):
         fail("the gh CLI is required to publish the GitHub Release")
 
 
+def supported_series(version):
+    major, minor, _ = parse_version(version)
+    return f"0.{minor}" if major == 0 else str(major)
+
+
+def stated_security_series(text):
+    matches = SECURITY_VERSION_RE.findall(text)
+    if len(matches) != 1:
+        raise ValueError(f"expected exactly one 'latest `N.x`' row in SECURITY.md, found {len(matches)}")
+    return matches[0][1]
+
+
+def set_security_series(text, version):
+    stated_security_series(text)  # exactly one, or refuse
+    series = supported_series(version)
+    return SECURITY_VERSION_RE.sub(lambda m: m.group(1) + series + m.group(3), text, count=1)
+
+
 def apply_edits(version, count):
     """Every file a release touches, written in one place.
 
@@ -217,6 +250,7 @@ def apply_edits(version, count):
     pending = {
         PLUGIN_JSON: set_json_version(read(PLUGIN_JSON), version),
         MARKETPLACE_JSON: set_json_version(read(MARKETPLACE_JSON), version),
+        SECURITY_MD: set_security_series(read(SECURITY_MD), version),
     }
     for path, lang in READMES.items():
         text = set_status_version(read(path), version)
@@ -226,11 +260,30 @@ def apply_edits(version, count):
         path.write_text(text, encoding="utf-8")
 
 
+def export_legacy_scripts(tag, dest):
+    """Extract `tag`'s skill scripts into dest; return that scripts directory.
+    A missing tag fails the release: the downgrade check must never be skipped
+    by accident on the one run that is supposed to enforce it."""
+    try:
+        archive = subprocess.run(
+            ["git", "archive", "--format=tar", tag, LEGACY_SCRIPTS],
+            cwd=ROOT, capture_output=True, check=True,
+        ).stdout
+    except subprocess.CalledProcessError:
+        fail(f"cannot export {LEGACY_SCRIPTS} from {tag}; the downgrade check needs that tag")
+    with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
+        tar.extractall(dest)
+    return Path(dest) / LEGACY_SCRIPTS
+
+
 def run_suite():
-    proc = subprocess.run(
-        [sys.executable, "-m", "pytest", str(ROOT / "tests"), "-q"],
-        cwd=ROOT, text=True,
-    )
+    with tempfile.TemporaryDirectory(prefix="audio-tldr-legacy-") as tmp:
+        legacy = export_legacy_scripts(LEGACY_TAG, tmp)
+        env = {**os.environ, "AUDIO_TLDR_LEGACY_SCRIPTS": str(legacy)}
+        proc = subprocess.run(
+            [sys.executable, "-m", "pytest", str(ROOT / "tests"), "-q"],
+            cwd=ROOT, text=True, env=env,
+        )
     if proc.returncode != 0:
         fail("the suite is not green; nothing was committed, tagged or published")
 

@@ -6,7 +6,7 @@ English | [繁體中文](./README.zh-TW.md)
 
 [![Release](https://img.shields.io/github/v/release/AugustusW/audio-tldr-skill?color=brightgreen)](https://github.com/AugustusW/audio-tldr-skill/releases)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](#prerequisites)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-skill%20%2B%20plugin-orange.svg)](https://claude.com/claude-code)
 [![Codex](https://img.shields.io/badge/Codex-compatible-black.svg)](https://developers.openai.com/codex/skills)
@@ -56,7 +56,8 @@ re-upload, re-transcribe, re-pay      transcribe once, reuse from cache
 - ✓ Apple Podcasts fallback built in: when yt-dlp's extractor fails, episodes resolve via the iTunes lookup API — cache identity stays on your original link; a show link (no episode id) automatically uses the latest episode
 - ✓ Opt-in frame extraction for video sources: scene-detection slide capture, or stills at exact timestamps — video fetched at ≤720p and deleted after extraction; frames share the transcript's cache entry
 - ✓ Subtitle export: `--format srt` / `--format vtt` write a standard subtitle file with segment timestamps alongside the transcript, on any of the four backends
-- ✓ Name correction: names that sound like another word (真真 heard as 珍珍) are fixed in the digest from the source's own title, channel, description, chapters and tags, plus an optional glossary — every change is listed, and the transcript is never edited
+- ✓ Transcript correction: before each digest, a model proposes sound-alike fixes, `correct.py` checks them and applies them to a cached copy; the original transcript is never edited (optional `pypinyin`, `jellyfish`)
+- ✓ Name correction: names that sound like another word (真真 heard as 珍珍) are fixed in the digest from the source's own title, channel, show/channel author, description, chapters and tags, plus an optional glossary — every change is listed, and the transcript is never edited
 - ✓ Install by copy, as a Claude Code plugin, **or** into Codex (open SKILL.md standard)
 
 ## Install
@@ -101,10 +102,11 @@ The media pipeline — download, transcription, cache — runs entirely on your 
 
 | Requirement | Why | Install |
 |---|---|---|
-| Python 3.9+ | runs the transcription script | usually preinstalled |
+| Python 3.10+ | runs the transcription script | macOS's built-in `python3` is 3.9 and not supported — `brew install python` or `uv python install 3.12`; Windows: python.org installer |
 | `yt-dlp` | download audio from URLs | `pip install yt-dlp` or `brew install yt-dlp` |
 | `ffmpeg` | audio extraction/conversion | `brew install ffmpeg` / `apt install ffmpeg` |
 | **One** whisper backend | speech-to-text | table below |
+| `pypinyin`, `jellyfish` (optional) | sound check for transcript correction | `pip install pypinyin jellyfish`, into the Python that has your whisper backend |
 
 Whisper backends, in the order the skill auto-detects them:
 
@@ -184,9 +186,10 @@ said.
 The full flow has been verified manually on Windows, in Claude Code and Codex, on versions
 before v0.9.0. v0.9.0 itself was checked on 2026-10-06 (Windows 11 Pro, Python 3.12.11,
 faster-whisper 1.2.1 on an RTX 5080): the full test suite, `--doctor`, real English and Chinese
-transcription with Traditional output, a cache hit, and `--format srt`. Name correction passed
-its unit tests there but has **not yet been run end-to-end on Windows** (those transcriptions
-were local files, which have no source details) — reports welcome. Install with PowerShell:
+transcription with Traditional output, a cache hit, and `--format srt`. v1.0 was run end to end
+on 2026-10-11 in both Claude Code and Codex (download, transcription, transcript correction,
+digest, `.srt`/`.vtt`, cache hits); see the CHANGELOG for what that run found and fixed. Install
+with PowerShell:
 
 ```powershell
 # prerequisites (winget shown; Chocolatey: choco install ffmpeg yt-dlp)
@@ -225,6 +228,13 @@ prefer the plugin install if you want managed versions.
   `python -m yt_dlp` whenever the module is installed, and the signed `python.exe` is allowed.
   A `yt-dlp.cmd` shim is **not** used (before v0.9.1 it was documented here but never actually
   invoked): batch files run through `cmd.exe`, where an `&` in a URL splits the command line.
+- **Python shims blocked in an agent sandbox** — with Smart App Control or another application
+  control policy on, launcher shims such as `%USERPROFILE%\.local\bin\python3.12.exe` (created
+  by uv) can be refused inside Codex's sandbox (`os error 4551`). Point the agent at the real
+  interpreter instead: set `AUDIO_TLDR_PYTHON` to the `python.exe` of the environment that has
+  the backend (for example a venv's `Scripts\python.exe`). Switching interpreters on Windows runs
+  the script as a child process and returns its output and exit code (before v1.0 the caller got
+  empty output and exit 0).
 - **YouTube downloads fail with HTTP 403** — recent yt-dlp needs a JavaScript runtime for
   YouTube. Install [Deno](https://deno.com/), or, if Node.js is already installed, add
   `--js-runtimes node` to yt-dlp's config file (`%APPDATA%\yt-dlp\config.txt`).
@@ -322,6 +332,9 @@ Be precise about what stays local and what doesn't:
 - **Cached transcripts are unencrypted plaintext, kept indefinitely by default**, under
   `~/.cache/audio-tldr/`. After processing sensitive content, `--clear` that entry, or configure
   a retention period.
+- **The corrected transcript is plaintext too.** `transcript.corrected.txt`, `corrections.json`
+  and `reference.md` sit next to the transcript in the cache folder and follow its retention
+  setting. See [Transcript correction](#transcript-correction).
 - **Digests persist in the output folder** (default `./audio-tldr-output/`, relative to your
   working directory) — including full-transcript translations, which carry essentially the whole
   transcript. The output folder has no clearing or retention mechanism; delete files manually,
@@ -404,17 +417,106 @@ error and stops — it never silently falls back to an agent-session digest, sin
 that would defeat the point of choosing this mode. Tradeoff: a small local model's
 digest quality is generally below the subagent path (sonnet / GPT-class models).
 
+## Transcript correction
+
+Speech recognition writes names and terms as words that sound like them. Before each digest of
+a Chinese or English transcript, a model proposes corrections, `correct.py` checks them, and
+the digest reads the corrected copy.
+
+- **How it works.** The model only returns a list of edits (wrong text, right text, the words
+  around it). It never rewrites the transcript. Each edit is accepted only if it passes every
+  check below; one that fails any of them is dropped and the rest still apply.
+  - *Sound.* Chinese: same syllable count, and at most one third of the syllables differ
+    (toneless pinyin via `pypinyin`; zh/z, ch/c, sh/s, ing/in, eng/en, ang/an and l/n count as
+    the same; for a heteronym the closest reading is used). English: compared word by word when
+    both sides have the same number of words (metaphone via `jellyfish`, distance at most
+    0.45), as a whole string otherwise.
+  - *Shape.* At most 24 characters each side; the place must be unique (or the edit is marked
+    "all occurrences"); a number character (digit or Chinese numeral) may only be replaced by a character with the identical reading, tones ignored; otherwise the edit is rejected;
+    an edit that mixes Chinese and Latin script is rejected.
+  - *Limits.* All edits together may change at most 5% of the text (or 24 characters,
+    whichever is larger), and an edit applied in 5 or more places is listed at the end of the
+    digest so you can check it.
+  - *Verification.* After applying, the result is checked again from the other direction. If
+    anything does not line up, the whole corrected copy is discarded and the digest uses the
+    original.
+- **Install.** `pip install pypinyin jellyfish` (optional), into the Python that has your whisper
+  backend: `--doctor` lists each interpreter with `module_backend`, `pypinyin` and `jellyfish`,
+  and `correct.py` switches to the one that has them, the same way `transcribe.py` switches to the
+  backend (`AUDIO_TLDR_PYTHON` overrides both). With Homebrew Python, `pip` refuses (PEP 668):
+  use `<that python> -m pip install --break-system-packages pypinyin jellyfish`, or install the
+  backend and both packages into a virtual environment and point `AUDIO_TLDR_PYTHON` at it. Without a package, edits in that script are not checked and not applied, and the
+  digest runs as before. `pypinyin` covers Chinese, `jellyfish` English. Installing one later
+  triggers a single recompute for transcripts that needed it.
+- **Where it is stored.** In the transcript's cache folder: `transcript.corrected.txt` (the
+  corrected copy), `corrections.json` (every edit, accepted or rejected, with the reason), and
+  `reference.md`. For subtitles, `transcript.corrected.srt` / `.vtt` are made when a digest
+  asks for them. Correction never modifies `transcript.txt`. (1.0 adds line breaks between
+  Whisper segments (at sentence ends only inside long lines) to a transcript cached by an older version the first time it reads it, with no
+  character changes. Only a strict UTF-8 file without a BOM is upgraded; a BOM or non-UTF-8
+  (e.g. Windows code page) cache is left as it is and still reads as one line.) These files are plaintext
+  like the transcript and follow the same retention setting.
+- **Reuse.** Digesting the same source again reuses the corrected copy. It is redone when the
+  transcript, your glossary or the source details change, or when a newer correction rule
+  ships; the transcription itself is never redone for this.
+- **Privacy mode.** With `digest_model: ollama:<model>` the corrections are proposed by your
+  local Ollama model too, so the transcript still never leaves the machine. If Ollama fails
+  (including a context too small for the request), the agent shows the error and
+  stops.
+
+  A long transcript is digested in sections and the section results are merged; a `note:` on
+  stderr says so, with the number of requests. `--whole-text` stops with an error instead of
+  using sections. Every request's reply may use the context left after its prompt (at least 4096 tokens). The section and merge steps ask the model not to think (Ollama `think: false`, ignored by models without thinking); the final digest uses the model's default. The context size is `AUDIO_TLDR_OLLAMA_NUM_CTX`, by default 32768 or the
+  model's own limit, whichever is smaller.
+
+  Timestamp check: when the input is a subtitle file, bracketed `[MM:SS]` / `[H:MM:SS]`
+  timestamps in the digest that do not appear in the subtitle are removed before output, and a
+  stderr note gives the count. Plain-text input is not filtered, and other forms (ranges,
+  parentheses) are not checked.
+- **Usage log.** Each correction and each digest adds one line to `usage.jsonl` in the same
+  cache folder: phase (`correct` or `digest`), path (`subagent`, `ollama` or `inline`), model,
+  and token counts (`input`, `output`, `cache_write`, `cache_read`, `total`). A field the
+  platform does not report is `null`, never an estimate: a subagent run in Claude Code or Codex
+  only reports its total, a local Ollama run reports input and output, and a digest the main
+  model writes itself (`digest_model: off`) has no per-call count at all. Only numbers and model
+  names are written, never transcript or digest text. Re-transcribing with `--force` keeps this
+  file.
+- **Languages.** Chinese (Mandarin and Cantonese) and English. The language the backend recorded
+  may be a code, a region tag (`zh-TW`) or a name (`Chinese`); anything else, such as Japanese,
+  is skipped.
+- **Known limitation.** Words that sound alike but mean different things cannot be told apart
+  by sound: in the calibration set, Paris → Prague passes the sound check. The other limits
+  (24 characters, a unique place, the 5% total (24 characters at minimum), edits applied 5 or more times listed in the
+  digest) bound that risk; they do not remove it. The English thresholds were calibrated mostly
+  on hand-curated pairs; the Chinese ones on real recognition errors plus curated boundary
+  pairs.
+- **Measured effect.** Measured on two podcast clips (Chinese, about 22 minutes in total) with no
+  glossary; the reference given to the model was the episode title, channel, description and the
+  show's author (the host names the show lists). The correction instructions and the source
+  details were extended after earlier measurements; the numbers here are from the latest re-run.
+  Character error rate (CER, pooled over both clips, against a hand-proofread reference) went
+  from 6.23% to 5.10-5.18% with `claude` (3 runs) on the mlx-whisper transcript, and from 7.35%
+  to 6.56-6.82% on the faster-whisper one. Names of people, places and products that appear in
+  the reference were written correctly 13 of 33 times before and 29-32 after (mlx), 21 of 33
+  before and 30-32 after (faster-whisper); part of that gain comes from the author names now
+  being in the reference. With `codex` (1 run each) CER was 5.18% and 6.44%; with a local Ollama
+  model (`gemma4:26b`, mlx transcript, 1 run) 5.66%, names 22 of 33. No edit made the score worse
+  against the reference in any of these runs. On an English public sample (`canterville-en`) the
+  model proposed nothing and the text did not change. Limits: only these two clips, and the
+  references were proofread from two models' drafts, so they can be wrong too. This is what
+  happened on these clips, not a guarantee for other audio.
+
 ## Name correction
 
 Speech recognition writes what it hears. A name that sounds like another word comes out as
 that word, and no model can tell them apart from the audio alone. The source usually spells
-the name right somewhere, though: in the title, the channel name, the description, the
+the name right somewhere, though: in the title, the channel name, the show or channel author (host names are often there), the description, the
 chapter titles, the tags.
 
 So the digest step gets a reference to check spellings against:
 
 - **Source details** (URL sources): kept in the cache entry as `context.json`. A YouTube
-  video's come from yt-dlp; an Apple Podcasts episode's from the iTunes lookup (show name and
+  video's come from yt-dlp; an Apple Podcasts episode's from the iTunes lookup (show name, show author and
   episode notes, where guests are usually named). Entries cached before v0.9.0 fetch them once
   on their next hit; if that fails, the next try is a week later.
 - **Your glossary** (optional): `~/.config/audio-tldr/glossary.txt` — one term per line,
@@ -450,6 +552,7 @@ Ask Claude, or run `scripts/transcribe.py` directly:
 | `--clear "<source>"` | delete one entry |
 | `--clear-all --yes` | delete everything |
 | `--set-retention <days>` | auto-prune entries older than N days (`off` = keep forever) |
+| `--ack-retention-notice` | stop the one-time "where your transcripts are kept" notice (the skill runs this after telling you) |
 | `--force` | re-transcribe one source, ignoring cache |
 | `--keep-audio` | keep the downloaded mp3 in the cache entry (default deletes it after transcription) |
 | `--doctor` | JSON environment diagnosis: Python path/version, backend & tool visibility (including exactly how yt-dlp will be launched), other interpreters that have a backend, MLX Metal availability |
@@ -463,6 +566,7 @@ Environment variables:
 | `AUDIO_TLDR_WHISPER_CPP_MODEL` | path to a ggml model file (enables the whisper.cpp backend) |
 | `AUDIO_TLDR_ZH_CONVERT` | Chinese conversion: `off`, or an OpenCC config (default `s2twp` — Taiwan Traditional incl. common phrases) |
 | `AUDIO_TLDR_PYTHON` | pin the Python interpreter the script runs under (wins over auto-probing). Useful when your whisper backend lives in a non-default Python (e.g. Homebrew 3.12) |
+| `AUDIO_TLDR_OLLAMA_NUM_CTX` | Context size (`num_ctx`) for Ollama requests; default 32768 or the model's own limit, whichever is smaller. A transcript that does not fit is digested in sections |
 | `AUDIO_TLDR_OLLAMA_HOST` | Ollama server base URL used by `digest_model: ollama:<model>` (default `http://localhost:11434`); set when Ollama runs on another machine on your network. `digest.py --ollama-host` overrides it for one call |
 | `AUDIO_TLDR_GLOSSARY` | path to the [name-correction](#name-correction) glossary (default `$XDG_CONFIG_HOME/audio-tldr/glossary.txt`, else `~/.config/audio-tldr/glossary.txt`) |
 
@@ -471,8 +575,20 @@ Environment variables:
 ```bash
 git clone https://github.com/AugustusW/audio-tldr-skill.git
 cd audio-tldr-skill
-python3 -m pytest tests/   # 272 unit tests, no network or model needed
+python3 -m pytest tests/   # 688 unit tests, no network or model needed
 ```
+
+Transcription quality is measured with `scripts/asr_eval.py` (needs `opencc`, `ffmpeg`, and a
+whisper backend; not part of the skill):
+
+```bash
+python3.12 scripts/asr_eval.py run --samples public --repeat 3 --label baseline
+python3.12 scripts/asr_eval.py compare <baseline.json> <new.json>   # exit 1 on a regression
+```
+
+The public samples in `tests/fixtures/eval/` are public-domain LibriVox recordings plus
+ffmpeg-generated tones and silence, and check the tool itself; references mark names as `〔name〕` (mark every occurrence). Quality decisions are made
+on a private set of real podcast clips kept in the upstream repository.
 
 Versioning: write the [CHANGELOG](./CHANGELOG.md) entry for the new version, then run
 
@@ -493,9 +609,20 @@ Manual-copy installs have no auto-update: re-copy the skill folder after a new r
 Your preferences, custom templates (`~/.config/audio-tldr/`), and cache
 (`~/.cache/audio-tldr/`) all live outside the skill folder — updating never touches them.
 
+## Compatibility
+
+From 1.0, every 1.x release keeps what lives on your disk working:
+
+- **Cache**: entries made by 0.9.x or any 1.x are read and reused by every later 1.x — including after you move or copy the whole cache folder. An entry is quietly brought up to date the first time 1.x uses it, and going back to 0.9.x still finds it (if you moved the cache, let 1.x use an entry once before going back).
+- **Windows caveat**: on Windows with a non-UTF-8 system code page and Python 3.14 or older, going back to 0.9.x can break 0.9.x's local-Ollama digest for transcripts that 1.x created (1.x writes transcripts as UTF-8); finding cached entries still works.
+- **Glossary**: same location, same one-term-per-line format.
+- **Settings**: `config.json` and `~/.config/audio-tldr/` (preferences, templates) keep their keys and locations; new versions only add keys.
+
+Not covered: the scripts' command-line flags and output fields, built-in template wording, and the exact text of transcripts and digests. Those can change between releases and are listed in the [CHANGELOG](./CHANGELOG.md).
+
 ## Status
 
-v0.9.1 ([CHANGELOG](./CHANGELOG.md)) — core logic is covered by 272 offline unit tests (yt-dlp,
+v0.9.1 ([CHANGELOG](./CHANGELOG.md)) — core logic is covered by 688 offline unit tests (yt-dlp,
 whisper backends, cache, OpenCC, ffmpeg/ffprobe frame extraction, and the Ollama HTTP endpoint
 are mocked; no network or models needed). The full flow has been manually verified (2026-07-19:
 real YouTube download, transcription, cached re-digest, Chinese conversion, `--keep-audio`,

@@ -5,6 +5,8 @@ touch git, GitHub or the filesystem are deliberately not exercised: they are a
 thin shell over subprocess calls, and mocking them would only assert that the
 mocks were called.
 """
+import subprocess
+
 import pytest
 
 from scripts import release
@@ -157,3 +159,45 @@ class TestGuards:
     @pytest.mark.parametrize("new,cur", [("0.7.3", "0.7.3"), ("0.7.2", "0.7.3"), ("0.6.9", "0.7.0")])
     def test_same_or_lower_is_not_newer(self, new, cur):
         assert not release.is_newer(new, cur)
+
+
+def test_export_legacy_scripts_fails_the_release_without_the_tag(tmp_path, monkeypatch):
+    def no_tag(*args, **kwargs):
+        raise subprocess.CalledProcessError(128, args[0])
+    monkeypatch.setattr(release.subprocess, "run", no_tag)
+    with pytest.raises(SystemExit):
+        release.export_legacy_scripts("v0.9.1", tmp_path)
+
+
+def test_run_suite_passes_the_legacy_scripts_dir(tmp_path, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(release, "export_legacy_scripts", lambda tag, dest: tmp_path / "s")
+    def fake_run(cmd, **kwargs):
+        seen.update(kwargs.get("env") or {})
+        return subprocess.CompletedProcess(cmd, 0)
+    monkeypatch.setattr(release.subprocess, "run", fake_run)
+    release.run_suite()
+    assert seen["AUDIO_TLDR_LEGACY_SCRIPTS"] == str(tmp_path / "s")
+
+
+SECURITY_SAMPLE = "| Version | Supported |\n|---|---|\n| latest `0.7.x`| ✅ |\n| older | ❌ |\n"
+
+
+def test_supported_series():
+    assert release.supported_series("0.9.1") == "0.9"
+    assert release.supported_series("1.0.0") == "1"
+    assert release.supported_series("1.4.2") == "1"
+
+
+def test_security_series_read_and_write():
+    assert release.stated_security_series(SECURITY_SAMPLE) == "0.7"
+    out = release.set_security_series(SECURITY_SAMPLE, "1.0.0")
+    assert "| latest `1.x`| ✅ |" in out
+    assert release.stated_security_series(out) == "1"
+
+
+def test_security_series_requires_exactly_one_row():
+    with pytest.raises(ValueError):
+        release.stated_security_series(SECURITY_SAMPLE + SECURITY_SAMPLE)
+    with pytest.raises(ValueError):
+        release.set_security_series("no table here", "1.0.0")

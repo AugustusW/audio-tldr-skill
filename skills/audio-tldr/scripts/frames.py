@@ -6,7 +6,7 @@ import json
 import re
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
@@ -123,10 +123,13 @@ def write_min_meta(entry: Path, source: str, title: str) -> None:
     if meta_path.exists():
         return
     entry.mkdir(parents=True, exist_ok=True)
-    meta_path.write_text(json.dumps({
+    _transcribe._atomic_write_text(meta_path, json.dumps({
         "source": source, "title": title, "frames_only": True,
         "created": datetime.now().isoformat(timespec="seconds"),
-    }, ensure_ascii=False))
+        "schema_version": _transcribe.SCHEMA_VERSION,
+        "cached_date": datetime.now(timezone.utc).isoformat(),
+        "files": {},
+    }))
 
 
 def _find_video(entry: Path):
@@ -199,10 +202,13 @@ def main(argv=None, run=subprocess.run) -> int:
 
     manifest = None
     if mani_path.exists() and not a.force:
-        manifest = json.loads(mani_path.read_text())
-        hit = (scene_cache_ok(manifest, threshold, a.min_gap) if mode == "scene"
-               else manifest.get("mode") == "at"
-               and not missing_at_times(manifest, at_times))
+        manifest = _transcribe._read_json(mani_path)
+        if not isinstance(manifest, dict):
+            manifest = None
+        hit = manifest is not None and (
+            scene_cache_ok(manifest, threshold, a.min_gap) if mode == "scene"
+            else manifest.get("mode") == "at"
+            and not missing_at_times(manifest, at_times))
         if hit:
             return _emit(fdir, manifest, cache_hit=True,
                          video_kept=_find_video(entry) is not None)
@@ -307,7 +313,7 @@ def main(argv=None, run=subprocess.run) -> int:
     entries.sort(key=lambda e: e["ts"])
     manifest = build_manifest(mode, threshold, a.min_gap, source, entries,
                               duration=duration)
-    mani_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=1))
+    mani_path.write_text(json.dumps(manifest, indent=1), encoding="utf-8")
     write_min_meta(entry, source, _title_for(source, run))
 
     video_kept = False
@@ -321,4 +327,5 @@ def main(argv=None, run=subprocess.run) -> int:
 
 
 if __name__ == "__main__":
+    _transcribe.utf8_stdio()
     sys.exit(main())

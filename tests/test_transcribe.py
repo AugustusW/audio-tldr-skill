@@ -1,6 +1,8 @@
 import importlib.util
 import json
+import os
 import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -469,6 +471,7 @@ def test_doctor_reports_environment(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(transcribe, "_module_available", lambda m: False)
     monkeypatch.setattr(transcribe, "_candidate_interpreters", lambda: ["/fake/py"])
     monkeypatch.setattr(transcribe, "_module_backend_in", lambda p: True)
+    monkeypatch.setattr(transcribe, "_modules_in", lambda p, mods: {m: m == "pypinyin" for m in mods})
     rc = transcribe.main(["--doctor"])
     assert rc == 0
     info = json.loads(capsys.readouterr().out)
@@ -476,7 +479,9 @@ def test_doctor_reports_environment(monkeypatch, tmp_path, capsys):
     for k in ("mlx_whisper", "faster_whisper", "whisper_cpp", "openai_whisper"):
         assert k in info["backends"]
     assert "yt_dlp" in info["tools"] and "ffmpeg" in info["tools"]
-    assert info["other_interpreters"] == [{"path": "/fake/py", "module_backend": True}]
+    # the sound checkers are reported per interpreter too: correct.py runs where they are
+    assert info["other_interpreters"] == [{"path": "/fake/py", "module_backend": True,
+                                           "pypinyin": True, "jellyfish": False}]
     assert "selected_backend" in info and "metal" in info
 
 
@@ -1119,7 +1124,7 @@ def test_ytdlp_context_extracts_fields():
             "description": "d", "chapters": [{"title": "開場"}, {"title": " "}, {}],
             "tags": ["真奈特", "", None]}
     assert transcribe.ytdlp_context(info) == {
-        "title": "T", "channel": "真奈特每天都在瞎忙", "description": "d",
+        "title": "T", "channel": "真奈特每天都在瞎忙", "creator": "u", "description": "d",
         "chapters": ["開場"], "tags": ["真奈特"]}
 
 
@@ -1491,3 +1496,135 @@ def test_doctor_launcher_is_null_without_ytdlp(monkeypatch, tmp_path, capsys):
     transcribe.main(["--doctor"])
     info = json.loads(capsys.readouterr().out)
     assert info["tools"]["yt_dlp"] is False and info["tools"]["yt_dlp_launcher"] is None
+
+
+def test_transcribe_audio_matches_what_main_caches(monkeypatch, tmp_path, capsys):
+    """asr_eval measures transcribe_audio(); it must be exactly what main() caches."""
+    raw = "hello there. hello there. hello there. bye"
+    segs = [{"start": 0.0, "end": 1.0, "text": "hello there."}]
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setattr(transcribe, "detect_backend", lambda: "mlx-whisper")
+    monkeypatch.setattr(transcribe, "_run_backend",
+                        lambda b, a, l, m=None, want_segments=False: (raw, 3.0, "en", segs))
+    clip = tmp_path / "c.mp3"
+    clip.write_bytes(b"a")
+    assert transcribe.main([str(clip), "--format", "srt"]) == 0
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    res = transcribe.transcribe_audio(str(clip), "mlx-whisper", want_segments=True)
+    assert Path(out["transcript_path"]).read_text() == res["text"]
+    assert res["raw_text"] == raw and res["collapsed_chars"] == len(raw) - len(res["text"].replace("\n", ""))
+    assert res["display_segments"] == segs
+
+
+def test_transcribe_audio_rejects_unknown_options():
+    with pytest.raises(TypeError):
+        transcribe.transcribe_audio("x.mp3", "mlx-whisper", vad=True)
+
+
+# ── Creator / author (v1.0 item 6, Task 9d) ─────────────────────────
+
+def test_ytdlp_context_creator_from_each_source_key():
+    assert transcribe.ytdlp_context({"creators": ["A", "B"]})["creator"] == "A B"
+    assert transcribe.ytdlp_context({"creator": " C "})["creator"] == "C"
+    assert transcribe.ytdlp_context({"artist": "D"})["creator"] == "D"
+    assert transcribe.ytdlp_context({"album_artist": "E"})["creator"] == "E"
+    assert transcribe.ytdlp_context({"channel": "Ch", "uploader": "U"})["creator"] == "U"
+
+
+def test_ytdlp_context_creator_precedence_and_skips_empty():
+    info = {"creators": [], "creator": " ", "artist": "D", "album_artist": "E"}
+    assert transcribe.ytdlp_context(info)["creator"] == "D"
+    assert transcribe.ytdlp_context({"creators": ["A", "", None, "B"], "artist": "D"})["creator"] == "A B"
+
+
+def test_ytdlp_context_uploader_skipped_when_equal_to_channel():
+    assert "creator" not in transcribe.ytdlp_context({"channel": "Same", "uploader": "Same"})
+    # uploader is also the channel fallback, so it is never its own creator
+    assert "creator" not in transcribe.ytdlp_context({"uploader": "U"})
+
+
+def test_ytdlp_context_creator_capped_and_omitted_when_empty():
+    ctx = transcribe.ytdlp_context({"creator": "x" * 500})
+    assert len(ctx["creator"]) == transcribe.CONTEXT_CREATOR_MAX == 200
+    assert "creator" not in transcribe.ytdlp_context({"title": "t", "creators": "nope"})
+
+
+def test_apple_context_passes_artist_name_as_creator():
+    r0 = {"trackName": "EP1", "collectionName": "Show", "artistName": "真真 老辣妹"}
+    assert transcribe.apple_context(r0)["creator"] == "真真 老辣妹"
+
+
+def test_old_context_json_without_creator_still_usable(tmp_path):
+    (tmp_path / "context.json").write_text('{"title": "t", "channel": "c"}')
+    assert str(transcribe.context_path_for(tmp_path)) == str(tmp_path / "context.json")
+
+
+# ── Windows: os.execv starts a child and ends the parent ─────────────
+# The caller (the agent's shell) then sees empty stdout and exit 0 while the
+# child prints later (2026-10-11 Windows real-path run). On Windows the switch
+# must run the child and pass its exit code back instead.
+
+def test_reexec_on_windows_runs_a_child_and_returns_its_exit_code(monkeypatch):
+    calls = []
+
+    class P:
+        returncode = 3
+    monkeypatch.setattr(transcribe, "_IS_WINDOWS", True)
+    monkeypatch.setattr(transcribe.subprocess, "run", lambda argv, **k: calls.append(argv) or P())
+    monkeypatch.setattr(transcribe.os, "execv", lambda *a: pytest.fail("execv must not be used on Windows"))
+    with pytest.raises(SystemExit) as e:
+        transcribe._reexec_into("C:/venv/python.exe", "C:/s/transcribe.py", ["--doctor"])
+    assert e.value.code == 3
+    assert calls == [["C:/venv/python.exe", "C:/s/transcribe.py", "--doctor"]]
+
+
+def test_reexec_elsewhere_still_replaces_the_process(monkeypatch):
+    calls = []
+    monkeypatch.setattr(transcribe, "_IS_WINDOWS", False)
+
+    def fake_execv(path, argv):
+        calls.append((path, argv))
+        raise RuntimeError("execv")
+    monkeypatch.setattr(transcribe.os, "execv", fake_execv)
+    with pytest.raises(RuntimeError):
+        transcribe._reexec_into("/py", "/s/transcribe.py", ["x"])
+    assert calls == [("/py", ["/py", "/s/transcribe.py", "x"])]
+
+
+def test_explicit_python_on_windows_goes_through_the_child_path(monkeypatch, tmp_path):
+    monkeypatch.delenv("AUDIO_TLDR_REEXECED", raising=False)
+    fake_py = tmp_path / "python.exe"; fake_py.write_text("")
+    monkeypatch.setenv("AUDIO_TLDR_PYTHON", str(fake_py))
+    seen = []
+    monkeypatch.setattr(transcribe, "_reexec_into", lambda py, script, argv: seen.append((py, argv)) or (_ for _ in ()).throw(SystemExit(0)))
+    with pytest.raises(SystemExit):
+        transcribe._honor_explicit_python(["--cache-info"])
+    assert seen == [(str(fake_py), ["--cache-info"])]
+
+
+# ── Windows: stdout is the console code page, not UTF-8 ──────────────
+# Without PYTHONUTF8, Python on Windows writes stdout in the ANSI code page
+# (cp950 on Traditional Chinese systems). Every script prints JSON with
+# ensure_ascii=False, so an agent reading it as UTF-8 got mojibake — digest.py
+# --tail could no longer be checked (2026-10-11 Windows run, Codex).
+# PYTHONIOENCODING=cp950 reproduces that code page on any OS.
+
+SCRIPTS_DIR = Path(transcribe.__file__).resolve().parent
+
+
+@pytest.mark.parametrize("name", ["transcribe.py", "correct.py", "digest.py", "frames.py"])
+def test_every_script_entry_switches_stdio_to_utf8(name):
+    src = (SCRIPTS_DIR / name).read_text(encoding="utf-8")
+    entry = src[src.index('if __name__ == "__main__":'):]
+    assert "utf8_stdio()" in entry, f"{name} must call utf8_stdio() before printing"
+
+
+def test_digest_tail_prints_utf8_under_a_legacy_code_page(tmp_path):
+    t = tmp_path / "t.txt"
+    t.write_text("第一行\n是明年一月記者徐佳仁報導", encoding="utf-8")
+    env = {**os.environ, "PYTHONIOENCODING": "cp950", "AUDIO_TLDR_REEXECED": "1"}
+    env.pop("PYTHONUTF8", None)
+    r = subprocess.run([sys.executable, str(SCRIPTS_DIR / "digest.py"), "--tail", str(t)],
+                       capture_output=True, env=env)
+    assert r.returncode == 0, r.stderr
+    assert "記者徐佳仁報導" in json.loads(r.stdout.decode("utf-8"))["tail"]

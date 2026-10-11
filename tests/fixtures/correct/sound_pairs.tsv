@@ -1,0 +1,258 @@
+# Sound-alike calibration pairs: lang<TAB>expect<TAB>wrong<TAB>right<TAB>source
+# expect: pass (must be accepted), block (must be rejected), limit (known limitation: judged ok although the meaning differs).
+# source: mined = taken from real ASR output; curated = hand-written plausible mishearings, NOT observed;
+#         prototype/architect/control = fixed control rows from the plan (never delete).
+zh	pass	正吉	正脊	prototype
+zh	pass	練才	斂財	prototype
+zh	pass	盛夢公	謝孟恭	prototype
+zh	pass	無二折	52折	prototype
+zh	pass	空腹員	空服員	prototype
+zh	pass	馬達松	馬拉松	prototype
+zh	pass	剛大灣	剛搭完	prototype
+zh	pass	阿聯球	阿聯酋	prototype
+en	pass	RayChain	Roichen	prototype
+en	pass	Ray Chan	Roichen	prototype
+en	pass	Germany	Gemini	prototype
+en	pass	Germini	Gemini	prototype
+en	pass	Brockham	Broadcom	prototype
+en	pass	Marvel	Marvell	prototype
+en	pass	Samtech	Semtech	prototype
+en	pass	Lumetan	Lumentum	prototype
+en	pass	Cohelon	Coherent	prototype
+en	pass	Max Linear	MaxLinear	prototype
+en	pass	openway	open weight	prototype
+en	pass	Halapeno	Jalapeno	prototype
+zh	block	中國	中共	architect
+zh	block	蘋果	谷歌	control
+zh	block	台北	高雄	control
+en	block	Apple	Google	control
+en	block	Nvidia	AMD	control
+en	block	Tesla	Toyota	control
+en	block	Meta	Microsoft	control
+en	block	Intel	Qualcomm	control
+en	block	Germany	France	control
+en	block	Broadcom	Marvell	control
+en	block	Samsung	Sony	control
+zh	pass	一幻而	一環而	mined
+zh	pass	一桌上	一坐上	mined
+zh	pass	主位優	主委優	mined
+zh	pass	互紅然	互轟然	mined
+zh	pass	些做法	些作法	mined
+zh	pass	你做長	你坐長	mined
+zh	pass	個心目	個新目	mined
+zh	pass	們既不	們技不	mined
+zh	pass	們領口	們林口	mined
+zh	pass	入響主	入享主	mined
+zh	pass	分乙身	分椅身	mined
+zh	pass	前期期	前幾集	mined
+zh	pass	務場所	務艙所	mined
+zh	pass	去封跪	去風櫃	mined
+zh	pass	古埃我	股癌我	mined
+zh	pass	命層可	命誠可	mined
+zh	pass	喔珍珍	喔真真	mined
+zh	pass	在高對	在搞對	mined
+zh	pass	墊電子	墊墊子	mined
+zh	pass	大領口	大林口	mined
+zh	pass	層剪壓	層減壓	mined
+zh	pass	很悲難	很北爛	mined
+zh	pass	急速越	集數越	mined
+zh	pass	恤譬如	恤比如	mined
+zh	pass	憤子大	氛仔大	mined
+zh	pass	探偷來	探頭來	mined
+zh	pass	日韓共	日航共	mined
+zh	pass	有欸我	有耶我	mined
+zh	pass	消灘好	消貪好	mined
+zh	pass	為招我	為找我	mined
+zh	pass	的食指	的實質	mined
+zh	pass	相騎試	相歧視	mined
+zh	pass	真煌寺	真黃寺	mined
+zh	pass	空回力	空迴力	mined
+zh	pass	選鼓跟	選股跟	mined
+zh	pass	賓寺吃	賓室吃	mined
+zh	pass	軟桿一	軟感一	mined
+zh	pass	載成嗎	載沉嗎	mined
+zh	pass	載服載	載浮載	mined
+zh	pass	鬼舞者	鬼武者	mined
+zh	block	三鐵的	真的是	mined
+zh	block	我的偶	沒有這	mined
+zh	block	沒有啊	旅行必	mined
+zh	block	北網球	個盤是	mined
+zh	block	謝在地	樣怎樣	mined
+zh	block	在旁邊	擅長煮	mined
+zh	block	覺得我	股票裡	mined
+zh	block	不是聽	我說她	mined
+zh	block	樣子開	往上開	mined
+zh	block	歡的東	是一個	mined
+zh	block	好什麼	我認知	mined
+zh	block	麼講就	舞的人	mined
+zh	block	比較不	有一個	mined
+zh	block	想要研	然後接	mined
+zh	block	開始賣	找不到	mined
+zh	block	時間當	那所以	mined
+zh	block	我就幾	全球第	mined
+zh	block	最終就	跟肌肉	mined
+zh	block	們在進	分兩次	mined
+zh	block	然後去	所以腳	mined
+zh	block	過來	好啊	mined
+zh	block	我說她	最近有	mined
+zh	block	注意到	己幫自	mined
+zh	block	會去觀	有這樣	mined
+zh	block	要配置	西到底	mined
+en	pass	Invidia	Nvidia	curated
+en	pass	Envidia	Nvidia	curated
+en	pass	Engine X	Nginx	curated
+en	pass	Cooper Nettie's	Kubernetes	curated
+en	pass	Cloud	Claude	curated
+en	pass	Kimmy	Kimi	curated
+en	pass	Quen	Qwen	curated
+en	pass	Sequoya	Sequoia	curated
+en	pass	Shao Mi	Xiaomi	curated
+en	pass	Andrew rill	Anduril	curated
+en	pass	Palentir	Palantir	curated
+en	pass	Cerebrus	Cerebras	curated
+en	pass	Grok	Groq	curated
+en	pass	Nasdak	Nasdaq	curated
+en	pass	Sisco	Cisco	curated
+en	pass	Sienna	Ciena	curated
+en	pass	Astro Labs	Astera Labs	curated
+en	pass	Jensen Wong	Jensen Huang	curated
+en	pass	Lisa Sue	Lisa Su	curated
+en	pass	Sundar Pichi	Sundar Pichai	curated
+en	pass	Zuckerburg	Zuckerberg	curated
+en	pass	Mixtrel	Mixtral	curated
+en	pass	Ruben	Rubin	curated
+en	pass	Cray do	Credo	curated
+en	pass	Anthropick	Anthropic	curated
+en	pass	Mystral	Mistral	curated
+en	pass	Hugging Phase	Hugging Face	curated
+en	pass	Tomahock	Tomahawk	curated
+en	pass	Pie torch	PyTorch	curated
+en	pass	Costko	Costco	curated
+en	pass	Starbux	Starbucks	curated
+en	pass	Chipotlay	Chipotle	curated
+en	block	Cisco	Arista	curated
+en	block	Micron	Samsung	curated
+en	block	Lumentum	Coherent	curated
+en	block	Nvidia	Intel	curated
+en	block	Amazon	Alphabet	curated
+en	block	Oracle	Salesforce	curated
+en	block	Google	Gemini	curated
+en	block	Claude	Gemini	curated
+en	block	Anthropic	OpenAI	curated
+en	block	Ford	Honda	curated
+en	block	Dell	HP	curated
+en	block	Adobe	Oracle	curated
+en	block	Netflix	Disney	curated
+en	block	Uber	Lyft	curated
+en	block	Visa	Mastercard	curated
+en	block	Boeing	Airbus	curated
+en	block	Pfizer	Moderna	curated
+en	block	Shell	Chevron	curated
+en	block	Tokyo	Paris	curated
+en	block	London	Berlin	curated
+en	block	Mars	Venus	curated
+en	limit	Paris	Prague	curated
+en	block	Gemini 2	Gemini 3	curated
+en	block	GPT-4	GPT-5	curated
+en	block	Apple	Apple 5	curated
+en	block	Docker	Kubernetes	curated
+en	block	Postgres	MySQL	curated
+en	block	Python	Rust	curated
+en	block	Linux	Windows	curated
+en	block	Cloudflare	Akamai	curated
+en	block	Palantir	Snowflake	curated
+en	block	Broadcom	Qualcomm	curated
+en	block	Marvell	Microchip	curated
+en	block	Tesla	Rivian	curated
+en	block	Spotify	Netflix	curated
+en	block	Zoom	Slack	curated
+en	block	Reddit	Twitter	curated
+en	block	Hopper	Blackwell	curated
+en	block	Llama	Mistral	curated
+en	block	DeepSeek	Qwen	curated
+en	block	Anthropic	Apple	curated
+en	block	Delta	United	curated
+en	block	Coffee	Tea	curated
+en	block	Monday	Friday	curated
+en	block	Revenue	Profit	curated
+en	block	Bull market	Bear market	curated
+en	block	Interest rate	Inflation	curated
+en	block	Stock	Bond	curated
+en	block	Buy	Sell	curated
+en	block	Growth	Value	curated
+en	block	Dividend	Earnings	curated
+zh	pass	聯發科	聯花科	curated
+zh	pass	巴菲特	爬菲特	curated
+zh	pass	貝佐斯	配佐斯	curated
+zh	pass	星巴克	星爬克	curated
+zh	pass	肯德基	肯特基	curated
+zh	pass	必勝客	必勝個	curated
+zh	pass	日月潭	熱月潭	curated
+zh	pass	黃仁勳	黃仁軍	curated
+zh	pass	柯文哲	柯文傑	curated
+zh	pass	比特幣	比他幣	curated
+zh	pass	區塊鏈	區塊面	curated
+zh	pass	馬斯克	馬斯特	curated
+zh	pass	特斯拉	特斯卡	curated
+zh	pass	亞馬遜	亞馬順	curated
+zh	pass	麥當勞	麥當豪	curated
+zh	pass	華爾街	華爾該	curated
+zh	pass	道瓊斯	道瓊薩	curated
+zh	pass	標普爾	飄普爾	curated
+zh	pass	賈伯斯	賈波克	curated
+zh	block	台北	台中	curated
+zh	block	新竹	新北	curated
+zh	block	台南	台中	curated
+zh	block	日本	日語	curated
+zh	block	銀行	銀幣	curated
+zh	block	房價	房租	curated
+zh	block	美元	美金	curated
+zh	block	股價	股利	curated
+zh	block	利率	利息	curated
+zh	block	高雄	高鐵	curated
+zh	block	中國	中華	curated
+zh	block	美國	英國	curated
+zh	block	日本	日報	curated
+zh	block	台灣	台北	curated
+zh	block	台積電	台灣大	curated
+zh	block	聯發科	聯合報	curated
+zh	block	台積電	台新金	curated
+zh	block	星巴克	星期天	curated
+zh	block	麥當勞	麥克風	curated
+zh	block	肯德基	肯亞人	curated
+zh	block	大立光	大都會	curated
+zh	block	通膨	通縮	curated
+zh	block	升息	降息	curated
+zh	block	外資	投信	curated
+zh	block	股票	股價	curated
+zh	block	殖利率	本益比	curated
+zh	block	比特幣	以太幣	curated
+zh	block	營收	盈餘	curated
+en	pass	Kyoxia	Kioxia	curated
+en	pass	Mediatech	MediaTek	curated
+en	pass	Realtech	Realtek	curated
+en	pass	Rocky Em	ROCm	curated
+en	pass	Bye do	Baidu	curated
+en	pass	Wiween	Wiwynn	curated
+en	pass	Alama	Ollama	curated
+en	pass	Air B and B	Airbnb	curated
+en	pass	Slumber J	Schlumberger	curated
+en	pass	Bowing	Boeing	curated
+en	pass	Alumina	Illumina	curated
+en	pass	Zowetis	Zoetis	curated
+en	pass	Eye dex	Idexx	curated
+en	pass	Kwanta	Quanta	curated
+en	pass	Whisker	Whisper	curated
+en	pass	Qorbo	Qorvo	curated
+zh	block	新光三越店	新光三菱廠	curated
+zh	block	美國聯準會	美國聯合國	curated
+zh	block	中華電信局	中華航空局	curated
+zh	block	日本東京都	日本東海道	curated
+zh	block	台灣大哥大	台灣中油公	curated
+zh	block	全國電子店	全國加油站	curated
+zh	block	高雄捷運站	高雄港務局	curated
+zh	block	第十名	第四名	control
+zh	block	十四	四十	control
+zh	block	十四號	四十號	control
+zh	block	這是個	這四個	control
+zh	block	3	山	control
