@@ -584,7 +584,7 @@ Environment variables:
 ```bash
 git clone https://github.com/AugustusW/audio-tldr-skill.git
 cd audio-tldr-skill
-python3 -m pytest tests/   # 688 unit tests, no network or model needed
+python3 -m pytest tests/   # 691 unit tests, no network or model needed
 ```
 
 Transcription quality is measured with `scripts/asr_eval.py` (needs `opencc`, `ffmpeg`, and a
@@ -631,7 +631,7 @@ Not covered: the scripts' command-line flags and output fields, built-in templat
 
 ## Status
 
-v1.0.0 ([CHANGELOG](./CHANGELOG.md)) — core logic is covered by 688 offline unit tests (yt-dlp,
+v1.0.0 ([CHANGELOG](./CHANGELOG.md)) — core logic is covered by 691 offline unit tests (yt-dlp,
 whisper backends, cache, OpenCC, ffmpeg/ffprobe frame extraction, and the Ollama HTTP endpoint
 are mocked; no network or models needed). The full flow has been manually verified (2026-07-19:
 real YouTube download, transcription, cached re-digest, Chinese conversion, `--keep-audio`,

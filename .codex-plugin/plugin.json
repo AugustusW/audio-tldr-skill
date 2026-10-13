@@ -1,0 +1,31 @@
+{
+  "name": "audio-tldr",
+  "version": "1.0.0",
+  "description": "Summarize videos, audio files, and podcasts into key takeaways with local, cached transcription.",
+  "author": { "name": "AugustusW", "url": "https://github.com/AugustusW" },
+  "license": "MIT",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "audio-tldr",
+    "shortDescription": "Summarize videos and podcasts",
+    "longDescription": "Give it a YouTube or podcast link, or a local audio or video file. It downloads the audio, transcribes it on your machine with Whisper (mlx-whisper, faster-whisper, whisper.cpp or openai-whisper), caches the transcript, and turns it into key points, a summary, or a translation. Follow-up questions about the same episode reuse the cached transcript instead of transcribing again.\n\nBefore each summary it can correct words that only sound like the right ones, such as names, checking them against the episode title and notes. The corrected copy is saved separately and the original transcript is never changed.\n\nRuns in Codex with local shell access: it needs Python 3.10+, ffmpeg, yt-dlp and one Whisper backend installed (pypinyin and jellyfish for the corrections). Audio never leaves the machine; the transcript text goes to the model that writes the summary, or to a local Ollama server if you configure one. Source and setup: https://github.com/AugustusW/audio-tldr-skill",
+    "developerName": "AugustusW",
+    "category": "Productivity",
+    "websiteURL": "https://github.com/AugustusW/audio-tldr-skill",
+    "supportURL": "https://github.com/AugustusW/audio-tldr-skill/issues",
+    "privacyPolicyURL": "https://app.augustusw.com/audio-tldr-privacy#privacy",
+    "termsOfServiceURL": "https://app.augustusw.com/audio-tldr-privacy#terms",
+    "capabilities": [
+      "Summarize YouTube videos, podcasts, and local audio or video files",
+      "Transcribe locally with Whisper and cache the transcript for follow-up questions",
+      "Correct sound-alike words and names before summarizing, keeping the original transcript"
+    ],
+    "defaultPrompt": [
+      "Summarize this video in 5 bullet points: <link>",
+      "What are the key takeaways from this podcast episode? <link>",
+      "Translate the main points of this talk into English: <link>"
+    ],
+    "composerIcon": "./.claude-plugin/icon.png",
+    "logo": "./.claude-plugin/icon.png"
+  }
+}
