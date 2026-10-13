@@ -38,6 +38,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_JSON = ROOT / ".claude-plugin" / "plugin.json"
 MARKETPLACE_JSON = ROOT / ".claude-plugin" / "marketplace.json"
+# The OpenAI / Codex plugin directory reads its own manifest; it carries the same version.
+CODEX_PLUGIN_JSON = ROOT / ".codex-plugin" / "plugin.json"
 CHANGELOG = ROOT / "CHANGELOG.md"
 README_EN = ROOT / "README.md"
 README_ZH = ROOT / "README.zh-TW.md"
@@ -250,6 +252,7 @@ def apply_edits(version, count):
     pending = {
         PLUGIN_JSON: set_json_version(read(PLUGIN_JSON), version),
         MARKETPLACE_JSON: set_json_version(read(MARKETPLACE_JSON), version),
+        CODEX_PLUGIN_JSON: set_json_version(read(CODEX_PLUGIN_JSON), version),
         SECURITY_MD: set_security_series(read(SECURITY_MD), version),
     }
     for path, lang in READMES.items():

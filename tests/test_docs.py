@@ -43,6 +43,41 @@ def test_marketplace_version_matches_plugin():
     )
 
 
+def test_codex_manifest_version_matches_plugin():
+    # The OpenAI / Codex directory reads .codex-plugin/plugin.json; release.py bumps it with the rest.
+    codex = json.loads(release.read(release.CODEX_PLUGIN_JSON))
+    assert codex["version"] == release.plugin_version()
+
+
+def test_codex_manifest_fits_the_directory_limits():
+    codex = json.loads(release.read(release.CODEX_PLUGIN_JSON))
+    ui = codex["interface"]
+    assert codex["name"] == json.loads(release.read(release.PLUGIN_JSON))["name"]
+    assert codex["skills"] == "./skills/" and (ROOT / "skills" / "audio-tldr" / "SKILL.md").is_file()
+    assert len(ui["displayName"]) <= 30 and len(ui["shortDescription"]) <= 30
+    assert 0 < len(ui["longDescription"]) <= 4000 and len(codex["description"]) <= 4000
+    assert len(ui["capabilities"]) <= 20 and all(len(c) <= 120 for c in ui["capabilities"])
+    assert len(ui["defaultPrompt"]) <= 3 and all(len(p) <= 128 for p in ui["defaultPrompt"])
+    for key in ("composerIcon", "logo"):
+        assert ui[key].startswith("./") and (ROOT / ui[key][2:]).is_file(), key
+
+
+def test_codex_manifest_links_point_at_the_live_pages():
+    # The directory listing shows these links. Privacy and terms are two sections of one page
+    # (legal-static/, served at app.augustusw.com and not published to GitHub), so each must
+    # name its own section, and that section must exist when the source page is here to check.
+    ui = json.loads(release.read(release.CODEX_PLUGIN_JSON))["interface"]
+    assert ui["websiteURL"] == "https://github.com/AugustusW/audio-tldr-skill"
+    # supportURL is a portal listing field (developers.openai.com/plugins/deploy/submission), not
+    # one the Codex runtime reads; the portal blocks the submission without it.
+    assert ui["supportURL"] == "https://github.com/AugustusW/audio-tldr-skill/issues"
+    page = ROOT / "legal-static" / "audio-tldr-privacy.html"
+    for key, section in (("privacyPolicyURL", "privacy"), ("termsOfServiceURL", "terms")):
+        assert ui[key] == f"https://app.augustusw.com/audio-tldr-privacy#{section}", key
+        if page.is_file():
+            assert f'id="{section}"' in page.read_text(encoding="utf-8"), section
+
+
 def test_changelog_newest_entry_matches_plugin_version():
     newest = release.newest_changelog_version(release.read(release.CHANGELOG))
     expected = release.plugin_version()
